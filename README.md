@@ -15,6 +15,11 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 
 Voraussetzung ist [Node.js](https://nodejs.org) ab Version 20.
 
+Unter Windows genügt ein Doppelklick auf `start.bat`. Die Datei installiert
+beim ersten Start die Abhängigkeiten und öffnet die App im Browser.
+
+Alternativ von Hand:
+
 ```bash
 npm install
 npm run dev
