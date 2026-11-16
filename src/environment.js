@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { HDRLoader } from 'three/addons/loaders/HDRLoader.js';
+import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 
 /**
  * Lighting presets. Each one describes a procedural HDR environment: a vertical
@@ -151,5 +153,80 @@ export function buildEnvironmentTexture(preset, width = 1024) {
   texture.wrapS = THREE.RepeatWrapping;
   texture.needsUpdate = true;
   texture.userData.floorIrradiance = irradiance;
+  return texture;
+}
+
+/** Shadow settings used for the real-time ground shadow under a user-supplied HDRI. */
+export const CUSTOM_SHADOW = { opacity: 0.35, radius: 5 };
+
+/**
+ * Loads a user-supplied HDRI (.hdr or .exr, equirectangular) as lighting.
+ * Besides the texture this works out what the procedural presets know by
+ * construction: how much light reaches the floor, and where the brightest
+ * light comes from (for the real-time ground shadow).
+ */
+export async function loadHdriFile(file) {
+  const isExr = /\.exr$/i.test(file.name);
+  if (!isExr && !/\.hdr$/i.test(file.name)) {
+    throw new Error('Bitte eine HDRI-Datei im Format .hdr oder .exr wählen.');
+  }
+
+  const url = URL.createObjectURL(file);
+  let texture;
+  try {
+    texture = await (isExr ? new EXRLoader() : new HDRLoader()).loadAsync(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  texture.wrapS = THREE.RepeatWrapping;
+
+  const { data, width, height } = texture.image;
+  const channels = data.length / (width * height);
+  const read =
+    texture.type === THREE.HalfFloatType ? (index) => THREE.DataUtils.fromHalfFloat(data[index]) : (index) => data[index];
+
+  // Sample on a coarse grid; lighting statistics do not need every pixel.
+  const stepX = Math.max(Math.floor(width / 512), 1);
+  const stepY = Math.max(Math.floor(height / 256), 1);
+  const solidAngleStep = ((Math.PI * stepY) / height) * ((2 * Math.PI * stepX) / width);
+  const irradiance = [0, 0, 0];
+  const key = new THREE.Vector3();
+  const dir = new THREE.Vector3();
+
+  for (let row = 0; row < height; row += stepY) {
+    // Image rows run top to bottom when flipY is set, bottom to top otherwise.
+    const v = texture.flipY ? 1 - (row + 0.5) / height : (row + 0.5) / height;
+    const el = (v - 0.5) * Math.PI;
+    const sinEl = Math.sin(el);
+    const cosEl = Math.cos(el);
+    for (let column = 0; column < width; column += stepX) {
+      const o = (row * width + column) * channels;
+      const r = Math.min(read(o), 5000);
+      const g = Math.min(read(o + 1), 5000);
+      const b = Math.min(read(o + 2), 5000);
+      if (sinEl <= 0) continue;
+
+      const weight = sinEl * cosEl * solidAngleStep;
+      irradiance[0] += r * weight;
+      irradiance[1] += g * weight;
+      irradiance[2] += b * weight;
+
+      // The light-weighted mean direction is a stable estimate of the main light.
+      const phi = ((column + 0.5) / width - 0.5) * 2 * Math.PI;
+      dir.set(cosEl * Math.cos(phi), sinEl, cosEl * Math.sin(phi));
+      const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      key.addScaledVector(dir, luminance * luminance * cosEl);
+    }
+  }
+
+  if (key.lengthSq() === 0) key.set(0.3, 1, 0.3);
+  key.normalize();
+  // Keep the shadow light well above the horizon so the ground shadow stays readable.
+  key.y = Math.max(key.y, 0.35);
+  key.normalize();
+
+  texture.userData.floorIrradiance = irradiance.map((value) => Math.max(value, 1e-4));
+  texture.userData.keyDirection = key;
   return texture;
 }

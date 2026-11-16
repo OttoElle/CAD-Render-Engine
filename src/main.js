@@ -2,6 +2,8 @@ import { Viewer } from './viewer.js';
 import { ViewCube } from './viewcube.js';
 import { loadStepFile } from './step-loader.js';
 import { getMaterialDef } from './materials.js';
+import { loadHdriFile } from './environment.js';
+import { restoreSettings, restoreModel, scheduleSave } from './persistence.js';
 import { renderTree } from './tree.js';
 import { renderPanel, identicalParts } from './panels.js';
 import { h } from './dom.js';
@@ -27,6 +29,7 @@ const isRenderSupported = () => 'gpu' in navigator;
 const viewer = new Viewer($('#viewport'));
 const viewCube = new ViewCube($('#viewcube-host'), viewer);
 const fileInput = $('#file-input');
+const hdriInput = $('#hdri-input');
 const dropzone = $('#dropzone');
 const statusEl = $('#status');
 const treeEl = $('#tree');
@@ -139,6 +142,8 @@ async function beginRender() {
     width,
     height,
     transparent: state.output.transparent,
+    denoised: false,
+    note: null,
     handle: null,
     blob: null,
     url: null,
@@ -159,12 +164,23 @@ async function beginRender() {
       transparent: render.transparent,
       ground: state.scene.ground,
       fov: frame.fov,
+      denoise: state.output.denoise,
+      gentle: state.output.gentle,
       onProgress: ({ stage, progress, samples }) => {
-        render.stage = stage;
         render.seconds = (performance.now() - started) / 1000;
-        if (stage === 'rendering') {
-          render.samples = samples;
-          render.progress = Math.min(progress ?? samples / targetSamples, 1);
+        if (stage === 'denoise-failed') {
+          render.denoised = false;
+          render.note = 'Entrauschen nicht möglich';
+        } else {
+          render.stage = stage;
+          if (stage === 'rendering' && samples !== null) {
+            render.samples = samples;
+            render.progress = Math.min(progress ?? samples / targetSamples, 1);
+          }
+          if (stage === 'denoising') {
+            render.denoised = true;
+            render.progress = progress ?? render.progress;
+          }
         }
         emit('renders:live');
       },
@@ -270,6 +286,7 @@ const actions = {
     state.views.push(view);
     select(`view:${view.id}`);
   },
+  loadHdri: () => hdriInput.click(),
   startRender: beginRender,
   cancelRender,
   deleteRender,
@@ -296,6 +313,7 @@ function refresh(what) {
     }
   }
 
+  scheduleSave();
   renderTree(treeEl, actions);
   if (live) panelLive?.();
   else panelLive = renderPanel(panelEl, { viewer, actions });
@@ -345,6 +363,7 @@ async function openFile(file) {
     $('#view-controls').hidden = false;
     dropzone.classList.add('loaded');
     resetForModel(file.name, parts);
+    if (restoreModel()) emit('materials');
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
     setStatus(`${file.name} geladen (${seconds} s)`, { timeout: 2500 });
   } catch (error) {
@@ -358,6 +377,23 @@ async function openFile(file) {
 fileInput.addEventListener('change', () => {
   openFile(fileInput.files[0]);
   fileInput.value = '';
+});
+
+hdriInput.addEventListener('change', async () => {
+  const file = hdriInput.files[0];
+  hdriInput.value = '';
+  if (!file) return;
+  setStatus(`Lade ${file.name} …`);
+  try {
+    viewer.setCustomEnvironment(await loadHdriFile(file));
+    state.lighting.presetId = 'custom';
+    state.lighting.hdriName = file.name;
+    emit('lighting');
+    setStatus(`${file.name} geladen`, { timeout: 2500 });
+  } catch (error) {
+    console.error(error);
+    setStatus(`HDRI konnte nicht geladen werden: ${error.message}`, { error: true });
+  }
 });
 
 // Drag and drop anywhere on the window.
@@ -376,7 +412,16 @@ window.addEventListener('drop', (event) => {
   event.preventDefault();
   dragDepth = 0;
   dropzone.classList.remove('dragover');
-  openFile(event.dataTransfer?.files?.[0]);
+  const file = event.dataTransfer?.files?.[0];
+  if (file && /\.(hdr|exr)$/i.test(file.name)) {
+    // Dropping an HDRI sets it as lighting.
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    hdriInput.files = transfer.files;
+    hdriInput.dispatchEvent(new Event('change'));
+    return;
+  }
+  openFile(file);
 });
 
 // --- Viewport tools -----------------------------------------------------------
@@ -398,6 +443,7 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') viewer.setHighlight([]);
 });
 
+restoreSettings();
 refresh('model');
 
 // Exposed for automated tests and debugging in the browser console.

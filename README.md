@@ -10,7 +10,7 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 2:** Materialien pro Bauteil und Lichtvorlagen
 - [x] **Schritt 3:** Fotorealistisches Rendern (Path Tracing auf der GPU) und PNG-Export,
   geführter Baum und Steuerungswürfel
-- [ ] **Schritt 4:** Entrauschen, Feinschliff und Tests mit größeren Baugruppen
+- [x] **Schritt 4:** Entrauschen, eigene HDRI-Umgebungen, gespeicherte Einstellungen
 
 ## Ablauf
 
@@ -24,12 +24,18 @@ Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
    Schrauben einer Größe, werden auf Wunsch gemeinsam zugewiesen. Bauteile
    ohne Material behalten ihre CAD-Farbe.
 3. **Szene:** Hintergrundfarbe und Boden mit Schatten.
-4. **Beleuchtung:** Lichtvorlage, Drehung und Helligkeit.
+4. **Beleuchtung:** Lichtvorlage oder eigene HDRI-Datei (.hdr, .exr), Drehung und Helligkeit.
+   Eine HDRI-Datei lässt sich auch einfach ins Fenster ziehen.
 5. **Perspektive:** Blickwinkel einstellen, das Plus speichert die aktuelle Ansicht.
-6. **Output:** Bildgröße, Qualität und transparenter Hintergrund. Ein Rahmen in
-   der Ansicht zeigt genau den Bildausschnitt, der gerendert wird.
+6. **Output:** Bildgröße, Qualität, transparenter Hintergrund und Entrauschen.
+   Ein Rahmen in der Ansicht zeigt genau den Bildausschnitt, der gerendert
+   wird. Der schonende Modus hilft auf Laptops und schwächeren Grafikkarten.
 7. **Renderings:** Das Plus startet ein Rendering. Fertige Bilder bleiben als
    Einträge stehen und lassen sich als PNG speichern.
+
+Szene, Beleuchtung und Output bleiben beim Neuladen erhalten, Materialien und
+gespeicherte Ansichten merkt sich die App pro STEP-Datei (im Browser, über den
+Dateinamen).
 
 Das Rendern braucht einen Browser mit WebGPU, also ein aktuelles Chrome oder
 Edge. Die Echtzeit-Ansicht läuft in jedem aktuellen Browser.
@@ -38,8 +44,8 @@ Edge. Die Echtzeit-Ansicht läuft in jedem aktuellen Browser.
 
 Voraussetzung ist [Node.js](https://nodejs.org) ab Version 20.
 
-Unter Windows genügt ein Doppelklick auf `start.bat`. Die Datei installiert
-beim ersten Start die Abhängigkeiten und öffnet die App im Browser.
+Unter Windows genügt ein Doppelklick auf `start.bat`. Die Datei gleicht bei
+jedem Start die Abhängigkeiten ab und öffnet die App im Browser.
 
 Alternativ von Hand:
 
@@ -80,6 +86,9 @@ Testmodell liegt unter `samples/Bracket.step`.
 - `src/render.js` rendert das Endbild mit
   [three-gpu-pathtracer](https://github.com/gkjohnson/three-gpu-pathtracer)
   auf WebGPU in einer eigenen, unsichtbaren Zeichenfläche.
+  Das Entrauschen übernimmt Open Image Denoise, das Modell dazu liegt unter
+  `public/oidn/`.
+- `src/persistence.js` speichert Einstellungen im Browser.
 - `src/state.js` hält alle Einstellungen, `src/tree.js` zeichnet den Baum,
   `src/panels.js` die Einstellungen zum gewählten Eintrag, `src/main.js`
   verbindet alles.

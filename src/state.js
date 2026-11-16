@@ -10,11 +10,21 @@ export const state = {
   parts: [],
   /** Material entries: { id, materialId, colorHex, partIds:Set }. A part is in at most one entry. */
   materials: [],
+  /** `background` is 'dark', 'grey', 'white', 'environment' (show the HDRI) or a hex colour. */
   scene: { background: 'dark', ground: true },
-  lighting: { presetId: 'studio-soft', rotation: 0, intensity: 1 },
+  /** `hdriName` is set while a user-supplied HDRI file is loaded (presetId 'custom'). */
+  lighting: { presetId: 'studio-soft', rotation: 0, intensity: 1, hdriName: null },
   /** Saved views: { id, name, position, target, fov }. */
   views: [],
-  output: { size: 'view', width: 1920, height: 1080, quality: 'standard', transparent: false },
+  output: {
+    size: 'view',
+    width: 1920,
+    height: 1080,
+    quality: 'standard',
+    transparent: false,
+    denoise: true,
+    gentle: false,
+  },
   /** Renderings: { id, name, status, progress, samples, width, height, blob, url, handle, seconds }. */
   renders: [],
   /** Key of the tree node whose settings are shown, e.g. "geometry" or "material:3". */

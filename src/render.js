@@ -1,5 +1,9 @@
 import * as THREE from 'three/webgpu';
-import { WebGPUPathTracer } from 'three-gpu-pathtracer/webgpu';
+import { WebGPUPathTracer, OIDNDenoiser } from 'three-gpu-pathtracer/webgpu';
+import { initUNetFromURL } from 'oidn-webgpu';
+
+// Open Image Denoise model, shipped with the app so rendering works offline.
+const DENOISE_WEIGHTS_URL = `${import.meta.env.BASE_URL}oidn/rt_hdr_alb_nrm_small.tza`;
 
 /**
  * Builds a clean copy of the viewer scene for the path tracer: visible parts
@@ -21,14 +25,24 @@ function buildRenderScene(viewer, { transparent, ground }) {
   scene.environment = viewer.environmentTexture;
   scene.environmentRotation.copy(viewer.scene.environmentRotation);
   scene.environmentIntensity = viewer.scene.environmentIntensity;
-  scene.background = transparent ? null : viewer.scene.background.clone();
+  const environmentBackground = viewer.showsEnvironmentBackground;
+  if (transparent) {
+    scene.background = null;
+  } else if (environmentBackground) {
+    scene.background = viewer.environmentTexture;
+    scene.backgroundRotation.copy(viewer.scene.backgroundRotation);
+    scene.backgroundIntensity = viewer.scene.backgroundIntensity;
+  } else {
+    scene.background = viewer.backgroundColor.clone();
+  }
 
-  if (ground && !transparent) {
+  // An HDRI background brings its own ground, so no floor is added there.
+  if (ground && !transparent && !environmentBackground) {
     // The path tracer has no shadow catcher, so the floor is a real surface.
     // Its albedo is chosen so that the unshadowed floor reflects exactly the
     // background colour and fades into it without a visible horizon.
     const { center, radius } = viewer.bounds;
-    const background = viewer.scene.background;
+    const background = viewer.backgroundColor;
     const irradiance = viewer.environmentTexture.userData.floorIrradiance;
     const intensity = Math.max(viewer.scene.environmentIntensity, 1e-3);
     const albedo = new THREE.Color().setRGB(
@@ -59,7 +73,7 @@ function buildRenderScene(viewer, { transparent, ground }) {
  * accumulated so far.
  */
 export async function startRender(viewer, options) {
-  const { width, height, transparent, ground, fov, onProgress } = options;
+  const { width, height, transparent, ground, fov, denoise, gentle, onProgress } = options;
   // Test hook for trying settings from the console, e.g. window.__renderDebug = { samples: 4 }.
   const debug = window.__renderDebug;
   const samples = debug?.samples ?? options.samples;
@@ -70,6 +84,10 @@ export async function startRender(viewer, options) {
 
   const renderer = new THREE.WebGPURenderer({ canvas, antialias: false, alpha: true, trackTimestamp: true });
   await renderer.init();
+  if (!renderer.backend.isWebGPUBackend) {
+    renderer.dispose();
+    throw new Error('Dieser Browser stellt kein WebGPU bereit.');
+  }
   renderer.setPixelRatio(1);
   renderer.setSize(width, height, false);
   renderer.toneMapping = viewer.renderer.toneMapping;
@@ -89,8 +107,21 @@ export async function startRender(viewer, options) {
   pathTracer.renderDelay = 0;
   pathTracer.fadeDuration = 0;
   pathTracer.minSamples = 1;
-  // Use most of each frame for path tracing; the page only shows a progress bar meanwhile.
-  pathTracer.targetFrameTime = 30;
+  if (gentle) {
+    // Small, fixed work packages keep weaker graphics hardware responsive
+    // and avoid driver timeouts, at the cost of a longer render.
+    pathTracer.adaptiveFrameBudget = false;
+    pathTracer.frameBudget = 60000;
+  } else {
+    // Use most of each frame for path tracing; the page only shows a progress bar meanwhile.
+    pathTracer.targetFrameTime = 30;
+  }
+
+  let denoiser = null;
+  if (denoise) {
+    denoiser = new OIDNDenoiser({ initUNetFromURL, auxWeightsUrl: DENOISE_WEIGHTS_URL });
+    pathTracer.setDenoiser(denoiser);
+  }
 
   if (debug) {
     if (debug.frameBudget) {
@@ -102,13 +133,44 @@ export async function startRender(viewer, options) {
 
   let state = 'running'; // running | finishing | cancelled | complete
   let resolveDone;
-  const done = new Promise((resolve) => {
+  let rejectDone;
+  const done = new Promise((resolve, reject) => {
     resolveDone = resolve;
+    rejectDone = reject;
+  });
+  // The caller may not be listening yet when a failure happens during setup.
+  done.catch(() => {});
+
+  function fail(error) {
+    if (state === 'failed' || state === 'complete' || state === 'cancelled') return;
+    state = 'failed';
+    try {
+      cleanup();
+    } catch {
+      // The device may already be gone; nothing left to free.
+    }
+    rejectDone(error);
+  }
+
+  renderer.onDeviceLost = (info) => {
+    fail(
+      new Error(
+        `Die Grafikkarte hat das Rendering abgebrochen (${info.message || 'Gerät verloren'}). ` +
+          'Versuche eine kleinere Bildgröße oder den schonenden Modus unter „Output“.',
+      ),
+    );
+  };
+
+  // If the denoiser cannot run (for example its model fails to load), keep the raw image.
+  denoiser?.addEventListener('error', (event) => {
+    console.warn('Denoising failed, keeping the raw image.', event.error);
+    onProgress?.({ stage: 'denoise-failed', progress: null, samples });
+    if (state === 'running') state = 'finishing';
   });
 
   pathTracer.addEventListener('progress', (event) => {
     if (state !== 'running') return;
-    onProgress?.({ stage: event.stage, progress: event.progress, samples: event.samples?.avg ?? 0 });
+    onProgress?.({ stage: event.stage, progress: event.progress, samples: event.samples?.avg ?? null });
   });
   pathTracer.addEventListener('complete', () => {
     if (state === 'running') state = 'finishing';
@@ -125,13 +187,19 @@ export async function startRender(viewer, options) {
   }
 
   function frame() {
+    if (state === 'failed') return;
     if (state === 'cancelled') {
       cleanup();
       resolveDone(null);
       return;
     }
 
-    pathTracer.renderSample();
+    try {
+      pathTracer.renderSample();
+    } catch (error) {
+      fail(error);
+      return;
+    }
 
     if (state === 'finishing') {
       // A WebGPU canvas only holds its image until the frame is presented,
@@ -146,7 +214,12 @@ export async function startRender(viewer, options) {
     requestAnimationFrame(frame);
   }
 
-  await pathTracer.setSceneAsync(scene, camera).catch(() => pathTracer.setScene(scene, camera));
+  try {
+    pathTracer.setScene(scene, camera);
+  } catch (error) {
+    fail(error);
+    throw error;
+  }
   requestAnimationFrame(frame);
 
   return {

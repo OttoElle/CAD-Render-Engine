@@ -243,6 +243,7 @@ function scenePanel() {
             ['grey', 'Hellgrau'],
             ['white', 'Weiß'],
             ['custom', 'Eigene Farbe'],
+            ...(state.lighting.presetId === 'custom' ? [['environment', 'HDRI-Umgebung anzeigen']] : []),
           ],
           isCustom ? 'custom' : state.scene.background,
           (value) => {
@@ -264,10 +265,12 @@ function scenePanel() {
             }),
           )
         : null,
-      checkbox('Boden mit Schatten', state.scene.ground, (checked) => {
-        state.scene.ground = checked;
-        emit('scene');
-      }),
+      state.scene.background === 'environment'
+        ? h('p', { class: 'hint' }, 'Die HDRI-Umgebung ist als Hintergrund sichtbar und bringt ihren eigenen Boden mit.')
+        : checkbox('Boden mit Schatten', state.scene.ground, (checked) => {
+            state.scene.ground = checked;
+            emit('scene');
+          }),
       h(
         'p',
         { class: 'hint' },
@@ -277,7 +280,7 @@ function scenePanel() {
   };
 }
 
-function lightingPanel() {
+function lightingPanel({ actions }) {
   const rotationValue = h('output', null, `${state.lighting.rotation}°`);
   const intensityValue = h('output', null, `${Math.round(state.lighting.intensity * 100)} %`);
   return {
@@ -286,14 +289,31 @@ function lightingPanel() {
       field(
         'Vorlage',
         selectControl(
-          LIGHT_PRESETS.map((preset) => [preset.id, preset.label]),
+          [...LIGHT_PRESETS.map((preset) => [preset.id, preset.label]), ['custom', 'Eigene HDRI-Datei …']],
           state.lighting.presetId,
           (value) => {
+            if (value === 'custom') {
+              // Stays on the previous preset until a file has actually been loaded.
+              emit('lighting');
+              actions.loadHdri();
+              return;
+            }
             state.lighting.presetId = value;
+            if (state.scene.background === 'environment') state.scene.background = 'grey';
             emit('lighting');
           },
         ),
       ),
+      state.lighting.presetId === 'custom'
+        ? [
+            h('div', { class: 'file-name' }, state.lighting.hdriName),
+            h('button', { onclick: actions.loadHdri }, 'Andere HDRI-Datei laden …'),
+          ]
+        : h(
+            'p',
+            { class: 'hint' },
+            'Mit „Eigene HDRI-Datei“ beleuchtest du das Modell mit einer echten Umgebung (.hdr oder .exr), zum Beispiel einem Studio oder einer Werkhalle.',
+          ),
       h(
         'label',
         { class: 'field' },
@@ -467,6 +487,24 @@ function outputPanel({ actions }) {
       output.transparent
         ? h('p', { class: 'hint' }, 'Hintergrund und Boden werden weggelassen, das PNG enthält nur das Modell.')
         : null,
+      checkbox('Entrauschen', output.denoise, (checked) => {
+        output.denoise = checked;
+        emit('output');
+      }),
+      h(
+        'p',
+        { class: 'hint' },
+        'Glättet das Restrauschen am Ende des Renderings. Damit reichen oft schon „Entwurf“ oder „Standard“.',
+      ),
+      checkbox('Schonender Modus', output.gentle, (checked) => {
+        output.gentle = checked;
+        emit('output');
+      }),
+      h(
+        'p',
+        { class: 'hint' },
+        'Für Laptops und schwächere Grafikkarten: rendert in kleineren Portionen, dauert dafür länger.',
+      ),
       h('button', { class: 'primary', onclick: actions.startRender }, 'Rendering starten'),
     ],
   };
@@ -506,9 +544,14 @@ function renderPanelFor(render, { actions }) {
       text.textContent =
         render.stage === 'rendering'
           ? `Sample ${Math.floor(render.samples)} von ${render.targetSamples} · ${formatDuration(render.seconds)}`
-          : 'Szene wird vorbereitet …';
+          : render.stage === 'denoising'
+            ? `Bild wird entrauscht … · ${formatDuration(render.seconds)}`
+            : 'Szene wird vorbereitet …';
     } else if (render.status === 'done') {
-      text.textContent = `Fertig nach ${formatDuration(render.seconds)} · ${Math.round(render.samples)} Samples`;
+      text.textContent =
+        `Fertig nach ${formatDuration(render.seconds)} · ${Math.round(render.samples)} Samples` +
+        (render.denoised ? ' · entrauscht' : '') +
+        (render.note ? ` · ${render.note}` : '');
     } else if (render.status === 'failed') {
       text.textContent = `Fehlgeschlagen: ${render.error}`;
     } else {

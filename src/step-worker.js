@@ -12,27 +12,20 @@ function getOcct() {
 }
 
 // Tessellation fine enough that curved faces stay smooth in close-up renderings.
+// The angular limit matters most for small fillets, where coarse triangles show
+// up as a zigzag pattern in the shading; halving it roughly triples the triangle count.
 const IMPORT_PARAMS = {
   linearUnit: 'millimeter',
   linearDeflectionType: 'bounding_box_ratio',
   linearDeflection: 0.0005,
-  angularDeflection: 0.2,
+  angularDeflection: 0.12,
 };
 
 /**
- * Builds line segments along the boundaries between B-rep faces. These are the
- * real CAD edges, independent of how finely the surfaces were tessellated.
+ * Every B-rep face has its own vertices. This maps each vertex to the first
+ * vertex at the same position, so neighbouring faces can be related.
  */
-function buildFaceEdges(position, index, brepFaces) {
-  const triangleCount = index.length / 3;
-  if (!brepFaces || brepFaces.length === 0 || triangleCount === 0) return null;
-
-  const faceOfTriangle = new Int32Array(triangleCount).fill(-1);
-  brepFaces.forEach((face, faceIndex) => {
-    for (let t = face.first; t <= face.last && t < triangleCount; t++) faceOfTriangle[t] = faceIndex;
-  });
-
-  // Each face has its own vertices, so weld them by position first.
+function weldVertices(position) {
   const vertexCount = position.length / 3;
   const welded = new Uint32Array(vertexCount);
   const byPosition = new Map();
@@ -57,6 +50,23 @@ function buildFaceEdges(position, index, brepFaces) {
     }
     welded[v] = id;
   }
+  return welded;
+}
+
+/**
+ * Builds line segments along the boundaries between B-rep faces. These are the
+ * real CAD edges, independent of how finely the surfaces were tessellated.
+ */
+function buildFaceEdges(position, index, brepFaces, welded) {
+  const triangleCount = index.length / 3;
+  if (!brepFaces || brepFaces.length === 0 || triangleCount === 0) return null;
+
+  const faceOfTriangle = new Int32Array(triangleCount).fill(-1);
+  brepFaces.forEach((face, faceIndex) => {
+    for (let t = face.first; t <= face.last && t < triangleCount; t++) faceOfTriangle[t] = faceIndex;
+  });
+
+  const vertexCount = position.length / 3;
 
   // An edge is a CAD edge if its triangles belong to different faces, or if it is open.
   const edges = new Map();
@@ -99,11 +109,10 @@ self.onmessage = async (event) => {
     const transfer = [];
     const meshes = result.meshes.map((mesh) => {
       const position = new Float32Array(mesh.attributes.position.array);
-      const normal = mesh.attributes.normal
-        ? new Float32Array(mesh.attributes.normal.array)
-        : null;
       const index = new Uint32Array(mesh.index.array);
-      const edges = buildFaceEdges(position, index, mesh.brep_faces);
+      const welded = weldVertices(position);
+      const normal = mesh.attributes.normal ? new Float32Array(mesh.attributes.normal.array) : null;
+      const edges = buildFaceEdges(position, index, mesh.brep_faces, welded);
       transfer.push(position.buffer, index.buffer);
       if (normal) transfer.push(normal.buffer);
       if (edges) transfer.push(edges.buffer);

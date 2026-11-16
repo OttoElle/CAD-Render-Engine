@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createMaterial } from './materials.js';
-import { buildEnvironmentTexture, getLightPreset, keyLightDirection } from './environment.js';
+import { buildEnvironmentTexture, getLightPreset, keyLightDirection, CUSTOM_SHADOW } from './environment.js';
 
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
 const BLACK = new THREE.Color(0x000000);
@@ -36,7 +36,8 @@ export class Viewer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(BACKGROUNDS.dark);
+    this._backgroundColor = new THREE.Color(BACKGROUNDS.dark);
+    this.scene.background = this._backgroundColor;
 
     this._pmrem = new THREE.PMREMGenerator(this.renderer);
     this._envTarget = null;
@@ -244,41 +245,77 @@ export class Viewer {
     };
   }
 
+  /**
+   * Sets or clears the user-supplied HDRI. It is used while the lighting
+   * preset is 'custom'. The viewer takes ownership of the texture.
+   */
+  setCustomEnvironment(texture) {
+    if (this._customEnvironment && this._customEnvironment !== texture) this._customEnvironment.dispose();
+    this._customEnvironment = texture;
+    this._environmentKey = null;
+  }
+
+  /** True while the HDRI itself is shown as the background. */
+  get showsEnvironmentBackground() {
+    return this.lighting.background === 'environment';
+  }
+
   /** Changes any subset of the lighting settings (preset, rotation, intensity, ground, background). */
   setLighting(changes) {
-    const presetChanged = 'presetId' in changes && changes.presetId !== this.lighting.presetId;
     Object.assign(this.lighting, changes);
+    const custom = this.lighting.presetId === 'custom' && this._customEnvironment;
     const preset = getLightPreset(this.lighting.presetId);
+    const key = custom ? this._customEnvironment.uuid : preset.id;
 
-    if (presetChanged || !this.environmentTexture) {
-      this.environmentTexture?.dispose();
+    if (key !== this._environmentKey) {
+      this._environmentKey = key;
+      // Procedural textures are rebuilt on demand; a custom HDRI is kept for reuse.
+      if (this.environmentTexture && this.environmentTexture !== this._customEnvironment) {
+        this.environmentTexture.dispose();
+      }
       this._envTarget?.dispose();
-      this.environmentTexture = buildEnvironmentTexture(preset);
+      this.environmentTexture = custom ? this._customEnvironment : buildEnvironmentTexture(preset);
       this._envTarget = this._pmrem.fromEquirectangular(this.environmentTexture);
       this.scene.environment = this._envTarget.texture;
+      this._keyDirection = custom ? this._customEnvironment.userData.keyDirection.clone() : keyLightDirection(preset);
+      this._shadowSettings = custom ? CUSTOM_SHADOW : preset.shadow;
     }
 
-    this.scene.environmentRotation.y = THREE.MathUtils.degToRad(this.lighting.rotation);
+    const rotation = THREE.MathUtils.degToRad(this.lighting.rotation);
+    this.scene.environmentRotation.y = rotation;
     this.scene.environmentIntensity = this.lighting.intensity;
-    // Either a named background or a custom colour such as "#dfe6ee".
-    this.scene.background.set(BACKGROUNDS[this.lighting.background] ?? this.lighting.background);
+
+    if (this.showsEnvironmentBackground) {
+      this.scene.background = this.environmentTexture;
+      this.scene.backgroundRotation.y = rotation;
+      this.scene.backgroundIntensity = this.lighting.intensity;
+    } else {
+      // Either a named background or a custom colour such as "#dfe6ee".
+      this._backgroundColor.set(BACKGROUNDS[this.lighting.background] ?? this.lighting.background);
+      this.scene.background = this._backgroundColor;
+      this.scene.backgroundIntensity = 1;
+    }
     this._updateShadowSetup();
     this.requestRender();
   }
 
+  /** Background as a plain colour, also while an HDRI is shown instead. */
+  get backgroundColor() {
+    return this._backgroundColor;
+  }
+
   _updateShadowSetup() {
-    const preset = getLightPreset(this.lighting.presetId);
     const { center, radius } = this.bounds;
     const hasModel = this.parts.length > 0;
 
-    this.ground.visible = hasModel && this.lighting.ground;
+    // An HDRI background brings its own ground, so the shadow plane would float in it.
+    this.ground.visible = hasModel && this.lighting.ground && !this.showsEnvironmentBackground;
     this.shadowLight.visible = this.ground.visible;
-    if (!hasModel) return;
+    if (!hasModel || !this._keyDirection) return;
 
-    const direction = keyLightDirection(preset).applyAxisAngle(
-      new THREE.Vector3(0, 1, 0),
-      THREE.MathUtils.degToRad(this.lighting.rotation),
-    );
+    const direction = this._keyDirection
+      .clone()
+      .applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(this.lighting.rotation));
     this.shadowLight.target.position.copy(center);
     this.shadowLight.position.copy(center).addScaledVector(direction, radius * 4);
 
@@ -292,10 +329,10 @@ export class Viewer {
     camera.near = radius * 0.5;
     camera.far = radius * 12;
     camera.updateProjectionMatrix();
-    this.shadowLight.shadow.radius = preset.shadow.radius;
+    this.shadowLight.shadow.radius = this._shadowSettings.radius;
     this.shadowLight.shadow.bias = -0.0005;
 
-    this.ground.material.opacity = preset.shadow.opacity;
+    this.ground.material.opacity = this._shadowSettings.opacity;
     this.ground.scale.setScalar(radius * 12);
     this.ground.position.set(center.x, this._groundY ?? center.y - radius, center.z);
   }
