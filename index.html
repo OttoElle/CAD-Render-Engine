@@ -11,82 +11,30 @@
       <aside id="sidebar">
         <header>
           <h1>CAD Render Engine</h1>
-          <button id="open-btn" class="primary">STEP öffnen …</button>
-          <input id="file-input" type="file" accept=".step,.stp,.STEP,.STP" hidden />
         </header>
-        <section id="model-info" hidden>
-          <div id="model-name"></div>
-          <div id="model-stats"></div>
-        </section>
-        <section id="parts-section" hidden>
-          <h2>Bauteile</h2>
-          <ul id="parts-list"></ul>
-        </section>
+        <nav id="tree" aria-label="Arbeitsschritte"></nav>
+        <input id="file-input" type="file" accept=".step,.stp,.STEP,.STP" hidden />
       </aside>
       <main id="stage">
         <canvas id="viewport"></canvas>
-        <div id="toolbar" hidden>
-          <button data-view="iso" title="Isometrische Ansicht">Iso</button>
-          <button data-view="front" title="Ansicht von vorne">Vorne</button>
-          <button data-view="right" title="Ansicht von rechts">Rechts</button>
-          <button data-view="top" title="Ansicht von oben">Oben</button>
-          <span class="sep"></span>
-          <button id="fit-btn" title="Modell einpassen (F)">Einpassen</button>
-          <button id="edges-btn" title="Kanten ein- und ausblenden (E)" aria-pressed="true">Kanten</button>
+        <div id="output-frame" hidden></div>
+        <section id="panel" hidden></section>
+        <div id="view-controls" hidden>
+          <div id="viewcube-host"></div>
+          <div id="view-tools">
+            <button id="fit-btn" title="Modell einpassen (F)">Einpassen</button>
+            <button id="edges-btn" title="Kanten ein- und ausblenden (E)" aria-pressed="true">Kanten</button>
+          </div>
         </div>
         <div id="dropzone">
           <div class="dropzone-inner">
             <strong>STEP-Datei hierher ziehen</strong>
-            <span>oder links „STEP öffnen …“ wählen (.step, .stp)</span>
+            <span>oder links unter „Geometrie“ eine Datei öffnen (.step, .stp)</span>
           </div>
         </div>
+        <div id="render-view" hidden></div>
         <div id="status" hidden></div>
       </main>
-      <aside id="inspector">
-        <section>
-          <h2>Material</h2>
-          <div class="fields">
-            <div id="material-target" class="hint">Kein Modell geladen</div>
-            <label>
-              <span>Material</span>
-              <select id="material-select" disabled></select>
-            </label>
-            <label>
-              <span>Farbe</span>
-              <input id="material-color" type="color" value="#b8bcc4" disabled />
-            </label>
-          </div>
-        </section>
-        <section>
-          <h2>Beleuchtung</h2>
-          <div class="fields">
-            <label>
-              <span>Vorlage</span>
-              <select id="light-preset"></select>
-            </label>
-            <label>
-              <span>Drehung <output id="light-rotation-value">0°</output></span>
-              <input id="light-rotation" type="range" min="-180" max="180" step="1" value="0" />
-            </label>
-            <label>
-              <span>Helligkeit <output id="light-intensity-value">100 %</output></span>
-              <input id="light-intensity" type="range" min="20" max="300" step="5" value="100" />
-            </label>
-            <label>
-              <span>Hintergrund</span>
-              <select id="background-select">
-                <option value="dark">Dunkel</option>
-                <option value="grey">Hellgrau</option>
-                <option value="white">Weiß</option>
-              </select>
-            </label>
-            <label class="check">
-              <input id="ground-toggle" type="checkbox" checked />
-              <span>Boden mit Schatten</span>
-            </label>
-          </div>
-        </section>
-      </aside>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

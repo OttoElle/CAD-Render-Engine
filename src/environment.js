@@ -67,7 +67,7 @@ function smoothstep(edge0, edge1, x) {
 
 /**
  * Renders a preset into an equirectangular HDR texture (linear, half float).
- * The same texture lights the real-time view and, later, the path tracer.
+ * The same texture lights the real-time view and the path tracer.
  */
 export function buildEnvironmentTexture(preset, width = 1024) {
   const height = width / 2;
@@ -82,6 +82,9 @@ export function buildEnvironmentTexture(preset, width = 1024) {
 
   const { top, horizon, bottom } = preset.sky;
   const dir = new THREE.Vector3();
+  // Irradiance arriving on a horizontal floor, used to match the floor to the background.
+  const irradiance = [0, 0, 0];
+  const solidAngleStep = (Math.PI / height) * ((2 * Math.PI) / width);
 
   for (let j = 0; j < height; j++) {
     const el = ((j + 0.5) / height - 0.5) * Math.PI;
@@ -117,6 +120,13 @@ export function buildEnvironmentTexture(preset, width = 1024) {
         b += light.color[2] * weight;
       }
 
+      if (sinEl > 0) {
+        const weight = sinEl * cosEl * solidAngleStep;
+        irradiance[0] += r * weight;
+        irradiance[1] += g * weight;
+        irradiance[2] += b * weight;
+      }
+
       const o = (j * width + i) * 3;
       data[o] = r;
       data[o + 1] = g;
@@ -140,5 +150,6 @@ export function buildEnvironmentTexture(preset, width = 1024) {
   texture.magFilter = THREE.LinearFilter;
   texture.wrapS = THREE.RepeatWrapping;
   texture.needsUpdate = true;
+  texture.userData.floorIrradiance = irradiance;
   return texture;
 }

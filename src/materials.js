@@ -7,6 +7,7 @@ import * as THREE from 'three';
  */
 export const MATERIALS = [
   { id: 'cad', label: 'Original (CAD-Farbe)', color: null, params: { metalness: 0, roughness: 0.5 } },
+  { id: 'alu-satin', label: 'Aluminium satiniert', color: '#cdd0d3', params: { metalness: 1, roughness: 0.3 } },
   { id: 'alu-matt', label: 'Aluminium matt', color: '#d5d7da', params: { metalness: 1, roughness: 0.42 } },
   { id: 'alu-poliert', label: 'Aluminium poliert', color: '#e6e7e9', params: { metalness: 1, roughness: 0.08 } },
   { id: 'alu-schwarz', label: 'Aluminium schwarz eloxiert', color: '#1b1c1f', params: { metalness: 1, roughness: 0.38 } },

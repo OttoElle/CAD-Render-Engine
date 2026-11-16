@@ -1,72 +1,338 @@
 import { Viewer } from './viewer.js';
+import { ViewCube } from './viewcube.js';
 import { loadStepFile } from './step-loader.js';
-import { MATERIALS, defaultColor } from './materials.js';
-import { LIGHT_PRESETS } from './environment.js';
+import { getMaterialDef } from './materials.js';
+import { renderTree } from './tree.js';
+import { renderPanel, identicalParts } from './panels.js';
+import { h } from './dom.js';
+import {
+  state,
+  subscribe,
+  emit,
+  select,
+  newId,
+  resetForModel,
+  addMaterial,
+  materialEntryOf,
+  setPartsAssigned,
+  QUALITY,
+  OUTPUT_SIZES,
+} from './state.js';
 
 const $ = (selector) => document.querySelector(selector);
 
+/** The final rendering runs on WebGPU; the real-time view works without it. */
+const isRenderSupported = () => 'gpu' in navigator;
+
 const viewer = new Viewer($('#viewport'));
+const viewCube = new ViewCube($('#viewcube-host'), viewer);
 const fileInput = $('#file-input');
 const dropzone = $('#dropzone');
 const statusEl = $('#status');
-const partsList = $('#parts-list');
+const treeEl = $('#tree');
+const panelEl = $('#panel');
+const outputFrameEl = $('#output-frame');
+const renderViewEl = $('#render-view');
 const edgesBtn = $('#edges-btn');
 
 let loading = false;
+let statusTimer = null;
+let panelLive = null;
 
-function setStatus(text, isError = false) {
+function setStatus(text, { error = false, timeout = 0 } = {}) {
+  clearTimeout(statusTimer);
   statusEl.hidden = !text;
   statusEl.textContent = text || '';
-  statusEl.classList.toggle('error', isError);
+  statusEl.classList.toggle('error', error);
+  if (text && timeout) statusTimer = setTimeout(() => setStatus(''), timeout);
 }
 
-const numberFormat = new Intl.NumberFormat('de-DE');
+// --- Applying state to the 3D view ------------------------------------------
 
-function renderPartsList(parts) {
-  partsList.replaceChildren();
-  for (const part of parts) {
-    const item = document.createElement('li');
-    item.dataset.partId = String(part.id);
-    item.title = 'Klicken zum Auswählen, Doppelklick zum Ein- und Ausblenden';
-
-    const swatch = document.createElement('span');
-    swatch.className = 'swatch';
-    swatch.style.background = part.colorHex;
-
-    const name = document.createElement('span');
-    name.className = 'part-name';
-    name.textContent = part.label;
-
-    const count = document.createElement('span');
-    count.className = 'part-count';
-    count.textContent = `${numberFormat.format(part.triangles)} △`;
-
-    item.append(swatch, name, count);
-    item.addEventListener('click', () => {
-      const id = viewer.selectedId === part.id ? null : part.id;
-      viewer.select(id);
-      onSelectionChanged(id);
-    });
-    item.addEventListener('dblclick', () => {
-      const hidden = item.classList.toggle('hidden-part');
-      viewer.setPartVisible(part.id, !hidden);
-    });
-    partsList.append(item);
+function applyMaterials() {
+  for (const part of state.parts) {
+    const entry = materialEntryOf(part.id);
+    const materialId = entry ? entry.materialId : 'cad';
+    const colorHex = entry ? entry.colorHex : `#${part.cadColor.getHexString()}`;
+    if (part.materialId === materialId && part.colorHex === colorHex) continue;
+    part.materialId = materialId;
+    part.colorHex = colorHex;
+    viewer.updatePartMaterial(part.id);
   }
 }
 
-function highlightSelected(id) {
-  for (const item of partsList.children) {
-    const selected = id !== null && Number(item.dataset.partId) === id;
-    item.classList.toggle('selected', selected);
-    if (selected) item.scrollIntoView({ block: 'nearest' });
-  }
+function applySceneAndLighting() {
+  viewer.setLighting({
+    presetId: state.lighting.presetId,
+    rotation: state.lighting.rotation,
+    intensity: state.lighting.intensity,
+    ground: state.scene.ground,
+    background: state.scene.background,
+  });
 }
+
+/** Pixel size of the final image for the current output settings. */
+function resolveOutputSize() {
+  const { output } = state;
+  if (output.size === 'custom') return { width: output.width, height: output.height };
+  const preset = OUTPUT_SIZES[output.size];
+  if (preset?.width) return { width: preset.width, height: preset.height };
+
+  // "Wie Ansicht": the viewport at screen resolution, capped to a sane size.
+  const canvas = viewer.canvas;
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  let width = canvas.clientWidth * ratio;
+  let height = canvas.clientHeight * ratio;
+  const scale = Math.min(1, 4096 / Math.max(width, height));
+  width = Math.max(Math.round((width * scale) / 2) * 2, 64);
+  height = Math.max(Math.round((height * scale) / 2) * 2, 64);
+  return { width, height };
+}
+
+/** Shows the crop of the final image when its aspect ratio differs from the viewport. */
+function updateOutputFrame() {
+  const show = state.parts.length > 0 && state.output.size !== 'view';
+  outputFrameEl.hidden = !show;
+  const { width, height } = resolveOutputSize();
+  viewer.outputAspect = show ? width / height : null;
+  if (!show) return;
+  const frame = viewer.getOutputFrame(width / height);
+  Object.assign(outputFrameEl.style, {
+    left: `${frame.x}px`,
+    top: `${frame.y}px`,
+    width: `${frame.width}px`,
+    height: `${frame.height}px`,
+  });
+}
+
+// --- Renderings ---------------------------------------------------------------
+
+function runningRender() {
+  return state.renders.find((render) => render.status === 'running') || null;
+}
+
+async function beginRender() {
+  if (state.parts.length === 0) return;
+  if (!isRenderSupported()) {
+    select('renders');
+    return;
+  }
+  const active = runningRender();
+  if (active) {
+    select(`render:${active.id}`);
+    setStatus('Es läuft bereits ein Rendering.', { timeout: 3000 });
+    return;
+  }
+
+  const { width, height } = resolveOutputSize();
+  const frame = viewer.getOutputFrame(width / height);
+  const targetSamples = QUALITY[state.output.quality].samples;
+  const render = {
+    id: newId(),
+    name: `Rendering ${state.renders.length + 1}`,
+    status: 'running',
+    stage: 'building',
+    progress: 0,
+    samples: 0,
+    targetSamples,
+    seconds: 0,
+    width,
+    height,
+    transparent: state.output.transparent,
+    handle: null,
+    blob: null,
+    url: null,
+    error: null,
+  };
+  state.renders.push(render);
+  select(`render:${render.id}`);
+
+  const started = performance.now();
+  viewer.setHighlight([]);
+  try {
+    // Loaded on demand so the path tracer does not slow down the start of the app.
+    const { startRender } = await import('./render.js');
+    render.handle = await startRender(viewer, {
+      width,
+      height,
+      samples: targetSamples,
+      transparent: render.transparent,
+      ground: state.scene.ground,
+      fov: frame.fov,
+      onProgress: ({ stage, progress, samples }) => {
+        render.stage = stage;
+        render.seconds = (performance.now() - started) / 1000;
+        if (stage === 'rendering') {
+          render.samples = samples;
+          render.progress = Math.min(progress ?? samples / targetSamples, 1);
+        }
+        emit('renders:live');
+      },
+    });
+    if (render.status !== 'running') {
+      // Cancelled or deleted while the scene was being prepared.
+      render.handle.cancel();
+      return;
+    }
+    emit('renders');
+
+    const blob = await render.handle.done;
+    render.handle = null;
+    render.seconds = (performance.now() - started) / 1000;
+    if (blob) {
+      render.blob = blob;
+      render.url = URL.createObjectURL(blob);
+      render.status = 'done';
+      render.progress = 1;
+    } else if (render.status === 'running') {
+      render.status = 'cancelled';
+    }
+  } catch (error) {
+    console.error(error);
+    render.handle = null;
+    render.status = 'failed';
+    render.error = error?.message || String(error);
+  }
+  emit('renders');
+}
+
+function cancelRender(render) {
+  render.status = 'cancelled';
+  render.handle?.cancel();
+  emit('renders');
+}
+
+function deleteRender(render) {
+  if (render.status === 'running') {
+    render.status = 'cancelled';
+    render.handle?.cancel();
+  }
+  if (render.url) URL.revokeObjectURL(render.url);
+  state.renders = state.renders.filter((other) => other !== render);
+  select('renders');
+}
+
+function saveRender(render) {
+  const base = (state.fileName || 'Modell').replace(/\.(step|stp)$/i, '');
+  const link = h('a', {
+    href: render.url,
+    download: `${base}_${render.name.replace(/\s+/g, '-')}_${render.width}x${render.height}.png`,
+  });
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+/** Shows the selected rendering over the viewport, live while it runs and as an image afterwards. */
+function updateRenderView() {
+  const [kind, idText] = state.selected.split(':');
+  const render = kind === 'render' ? state.renders.find((item) => item.id === Number(idText)) : null;
+  const content =
+    render?.status === 'done'
+      ? h('img', { src: render.url, alt: render.name })
+      : render?.status === 'running' && render.handle
+        ? render.handle.canvas
+        : null;
+
+  renderViewEl.hidden = !render;
+  if (!render) {
+    renderViewEl.replaceChildren();
+    return;
+  }
+  const current = renderViewEl.firstChild;
+  const same =
+    current &&
+    ((content && current === content) ||
+      (content?.tagName === 'IMG' && current.tagName === 'IMG' && current.src === content.src));
+  if (same) return;
+  renderViewEl.replaceChildren(
+    content ||
+      h(
+        'p',
+        { class: 'render-placeholder' },
+        render.status === 'running' ? 'Szene wird vorbereitet …' : 'Kein Bild vorhanden',
+      ),
+  );
+}
+
+// --- Tree and panel -----------------------------------------------------------
+
+const actions = {
+  openFile: () => fileInput.click(),
+  addMaterial: () => {
+    if (state.parts.length === 0) return;
+    const entry = addMaterial();
+    select(`material:${entry.id}`);
+  },
+  addView: () => {
+    if (state.parts.length === 0) return;
+    const view = { id: newId(), name: `Ansicht ${state.views.length + 1}`, ...viewer.getViewState() };
+    state.views.push(view);
+    select(`view:${view.id}`);
+  },
+  startRender: beginRender,
+  cancelRender,
+  deleteRender,
+  saveRender,
+  resolveOutputSize,
+  fit: () => viewer.fit(),
+  closePanel: () => select(''),
+  renderSupported: isRenderSupported(),
+};
+
+function refresh(what) {
+  const live = what.endsWith(':live');
+  const area = what.replace(':live', '');
+
+  if (area === 'model' || area === 'materials') applyMaterials();
+  if (area === 'model' || area === 'scene' || area === 'lighting') applySceneAndLighting();
+
+  if (what === 'selection') {
+    viewer.setHighlight([]);
+    const [kind, idText] = state.selected.split(':');
+    if (kind === 'view') {
+      const view = state.views.find((item) => item.id === Number(idText));
+      if (view) viewer.applyViewState(view);
+    }
+  }
+
+  renderTree(treeEl, actions);
+  if (live) panelLive?.();
+  else panelLive = renderPanel(panelEl, { viewer, actions });
+  updateOutputFrame();
+  updateRenderView();
+}
+
+subscribe(refresh);
+
+viewer.onViewChange = () => {
+  viewCube.update();
+  updateOutputFrame();
+};
+
+viewer.onPartClick = (partId) => {
+  const [kind, idText] = state.selected.split(':');
+  const entry = kind === 'material' ? state.materials.find((item) => item.id === Number(idText)) : null;
+  if (entry && partId !== null) {
+    // While a material is open, clicking parts in the model assigns them.
+    const part = state.parts[partId];
+    setPartsAssigned(
+      entry,
+      identicalParts(part).map((item) => item.id),
+      !entry.partIds.has(partId),
+    );
+    return;
+  }
+  viewer.setHighlight(partId === null ? [] : [partId]);
+  if (partId !== null) setStatus(state.parts[partId].label, { timeout: 2500 });
+};
+
+// --- Opening files ------------------------------------------------------------
 
 async function openFile(file) {
   if (!file || loading) return;
   if (!/\.(step|stp)$/i.test(file.name)) {
-    setStatus('Bitte eine STEP-Datei wählen (.step oder .stp).', true);
+    setStatus('Bitte eine STEP-Datei wählen (.step oder .stp).', { error: true });
     return;
   }
 
@@ -76,33 +342,19 @@ async function openFile(file) {
   try {
     const parts = await loadStepFile(file);
     viewer.setParts(parts);
-    renderPartsList(parts);
-    refreshMaterialPanel();
-
-    const triangles = parts.reduce((sum, part) => sum + part.triangles, 0);
-    $('#model-name').textContent = file.name;
-    $('#model-stats').textContent =
-      `${parts.length} ${parts.length === 1 ? 'Bauteil' : 'Bauteile'} · ` +
-      `${numberFormat.format(triangles)} Dreiecke`;
-    $('#model-info').hidden = false;
-    $('#parts-section').hidden = false;
-    $('#toolbar').hidden = false;
+    $('#view-controls').hidden = false;
     dropzone.classList.add('loaded');
-
+    resetForModel(file.name, parts);
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
-    setStatus(`${file.name} geladen (${seconds} s)`);
-    setTimeout(() => {
-      if (!loading) setStatus('');
-    }, 2500);
+    setStatus(`${file.name} geladen (${seconds} s)`, { timeout: 2500 });
   } catch (error) {
     console.error(error);
-    setStatus(`Import fehlgeschlagen: ${error.message}`, true);
+    setStatus(`Import fehlgeschlagen: ${error.message}`, { error: true });
   } finally {
     loading = false;
   }
 }
 
-$('#open-btn').addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => {
   openFile(fileInput.files[0]);
   fileInput.value = '';
@@ -127,9 +379,8 @@ window.addEventListener('drop', (event) => {
   openFile(event.dataTransfer?.files?.[0]);
 });
 
-for (const button of document.querySelectorAll('#toolbar [data-view]')) {
-  button.addEventListener('click', () => viewer.setView(button.dataset.view));
-}
+// --- Viewport tools -----------------------------------------------------------
+
 $('#fit-btn').addEventListener('click', () => viewer.fit());
 
 function toggleEdges() {
@@ -140,108 +391,14 @@ function toggleEdges() {
 edgesBtn.addEventListener('click', toggleEdges);
 
 window.addEventListener('keydown', (event) => {
-  if (event.target instanceof HTMLInputElement || event.metaKey || event.ctrlKey) return;
+  const tag = event.target.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || event.metaKey || event.ctrlKey) return;
   if (event.key === 'f' || event.key === 'F') viewer.fit();
   if (event.key === 'e' || event.key === 'E') toggleEdges();
-  if (event.key === 'Escape') {
-    viewer.select(null);
-    onSelectionChanged(null);
-  }
+  if (event.key === 'Escape') viewer.setHighlight([]);
 });
 
-// --- Material ---------------------------------------------------------------
-
-const materialSelect = $('#material-select');
-const materialColor = $('#material-color');
-const materialTarget = $('#material-target');
-
-for (const material of MATERIALS) {
-  materialSelect.add(new Option(material.label, material.id));
-}
-
-/** Parts the material controls act on: the selected part, or all parts if none is selected. */
-function targetParts() {
-  if (viewer.selectedId !== null) return [viewer.parts[viewer.selectedId]];
-  return viewer.parts;
-}
-
-function refreshMaterialPanel() {
-  const targets = targetParts();
-  const hasModel = viewer.parts.length > 0;
-  materialSelect.disabled = !hasModel;
-  materialColor.disabled = !hasModel;
-  if (!hasModel) {
-    materialTarget.textContent = 'Kein Modell geladen';
-    return;
-  }
-  materialTarget.textContent =
-    viewer.selectedId !== null ? targets[0].label : `Alle Bauteile (${targets.length})`;
-
-  // Show a value only if all target parts agree on it.
-  const sameMaterial = targets.every((part) => part.materialId === targets[0].materialId);
-  materialSelect.value = sameMaterial ? targets[0].materialId : '';
-  const sameColor = targets.every((part) => part.colorHex === targets[0].colorHex);
-  if (sameColor) materialColor.value = targets[0].colorHex;
-}
-
-function updateSwatch(part) {
-  const swatch = partsList.querySelector(`li[data-part-id="${part.id}"] .swatch`);
-  if (swatch) swatch.style.background = part.colorHex;
-}
-
-materialSelect.addEventListener('change', () => {
-  for (const part of targetParts()) {
-    part.materialId = materialSelect.value;
-    part.colorHex = defaultColor(part, part.materialId);
-    viewer.updatePartMaterial(part.id);
-    updateSwatch(part);
-  }
-  refreshMaterialPanel();
-});
-
-materialColor.addEventListener('input', () => {
-  for (const part of targetParts()) {
-    part.colorHex = materialColor.value;
-    viewer.updatePartMaterial(part.id);
-    updateSwatch(part);
-  }
-});
-
-function onSelectionChanged(id) {
-  highlightSelected(id);
-  refreshMaterialPanel();
-}
-
-// --- Lighting ---------------------------------------------------------------
-
-const lightPreset = $('#light-preset');
-for (const preset of LIGHT_PRESETS) {
-  lightPreset.add(new Option(preset.label, preset.id));
-}
-lightPreset.value = viewer.lighting.presetId;
-lightPreset.addEventListener('change', () => viewer.setLighting({ presetId: lightPreset.value }));
-
-$('#light-rotation').addEventListener('input', (event) => {
-  const rotation = Number(event.target.value);
-  $('#light-rotation-value').textContent = `${rotation}°`;
-  viewer.setLighting({ rotation });
-});
-
-$('#light-intensity').addEventListener('input', (event) => {
-  const percent = Number(event.target.value);
-  $('#light-intensity-value').textContent = `${percent} %`;
-  viewer.setLighting({ intensity: percent / 100 });
-});
-
-$('#background-select').addEventListener('change', (event) => {
-  viewer.setLighting({ background: event.target.value });
-});
-
-$('#ground-toggle').addEventListener('change', (event) => {
-  viewer.setLighting({ ground: event.target.checked });
-});
-
-viewer.onSelect = onSelectionChanged;
+refresh('model');
 
 // Exposed for automated tests and debugging in the browser console.
-window.__cadViewer = viewer;
+window.__cad = { viewer, state, actions, select, getMaterialDef };

@@ -4,6 +4,7 @@ import { createMaterial } from './materials.js';
 import { buildEnvironmentTexture, getLightPreset, keyLightDirection } from './environment.js';
 
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
+const BLACK = new THREE.Color(0x000000);
 
 // View directions in CAD coordinates (Z up), pointing from the model to the camera.
 const BACKGROUNDS = {
@@ -73,7 +74,10 @@ export class Viewer {
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.12;
-    this.controls.addEventListener('change', () => this.requestRender());
+    this.controls.addEventListener('change', () => {
+      this.requestRender();
+      this.onViewChange?.();
+    });
 
     // CAD models are Z-up, three.js and HDRI lighting are Y-up.
     this.modelRoot = new THREE.Group();
@@ -81,9 +85,14 @@ export class Viewer {
     this.scene.add(this.modelRoot);
 
     this.parts = [];
-    this.selectedId = null;
+    this.highlighted = new Set();
     this.edgesVisible = true;
-    this.onSelect = null;
+    /** Called with the part id (or null) when the user clicks in the viewport. */
+    this.onPartClick = null;
+    /** Aspect ratio of the final image, or null if it follows the viewport. */
+    this.outputAspect = null;
+    /** Called whenever the camera or the viewport size changes. */
+    this.onViewChange = null;
     this.bounds = new THREE.Sphere(new THREE.Vector3(), 1);
 
     this._needsRender = true;
@@ -117,7 +126,7 @@ export class Viewer {
     }
 
     this.parts = parts;
-    this.selectedId = null;
+    this.highlighted = new Set();
 
     for (const part of parts) {
       part.mesh.userData.partId = part.id;
@@ -155,34 +164,84 @@ export class Viewer {
   setView(name) {
     const dir = VIEW_DIRECTIONS[name] || VIEW_DIRECTIONS.iso;
     // Convert the CAD (Z-up) direction to world (Y-up) space.
-    const direction = new THREE.Vector3(dir[0], dir[2], -dir[1]).normalize();
-    this._frame(direction);
+    this._frame(new THREE.Vector3(dir[0], dir[2], -dir[1]).normalize());
   }
 
   /** Fits the model into the viewport while keeping the current viewing direction. */
   fit() {
-    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
-    this._frame(direction);
+    this._frame(this.camera.position.clone().sub(this.controls.target).normalize());
   }
 
   _frame(direction) {
     const { center, radius } = this.bounds;
-    const vFov = THREE.MathUtils.degToRad(this.camera.fov);
-    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
+    // Fit into the output frame, which is what the final image shows.
+    const frame = this.getOutputFrame(this.outputAspect ?? this.camera.aspect);
+    const vFov = THREE.MathUtils.degToRad(frame.fov);
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (frame.width / frame.height));
     const distance = (radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.05;
+    this._moveCamera(center, direction, distance, false);
+  }
 
-    // Looking straight down the up axis is degenerate for orbit controls; nudge it.
+  /**
+   * Turns the camera to look at the model from the given world direction,
+   * keeping the current pivot and zoom. Used by the view cube.
+   */
+  lookFrom(direction) {
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    this._moveCamera(this.controls.target.clone(), direction.clone().normalize(), offset.length(), true);
+  }
+
+  /** Orbits by the given angles in degrees (positive azimuth turns the camera to the right). */
+  orbitBy(azimuth, elevation) {
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const spherical = new THREE.Spherical().setFromVector3(offset);
+    spherical.theta += THREE.MathUtils.degToRad(azimuth);
+    spherical.phi = THREE.MathUtils.clamp(spherical.phi - THREE.MathUtils.degToRad(elevation), 0.001, Math.PI - 0.001);
+    const direction = new THREE.Vector3().setFromSpherical(spherical).normalize();
+    this._moveCamera(this.controls.target.clone(), direction, offset.length(), true);
+  }
+
+  _moveCamera(target, direction, distance, animate) {
+    // Looking straight along the up axis is degenerate for orbit controls; nudge it.
     if (Math.abs(direction.y) > 0.9999) {
-      direction.set(0, Math.sign(direction.y), 0.0001).normalize();
+      direction.set(0, Math.sign(direction.y), 0.0005).normalize();
     }
 
-    this.controls.target.copy(center);
-    this.camera.position.copy(center).addScaledVector(direction, distance);
-    this.camera.near = Math.max(distance / 1000, radius / 10000);
-    this.camera.far = distance + radius * 20;
-    this.camera.updateProjectionMatrix();
-    this.controls.update();
-    this.requestRender();
+    const apply = (dir, dist, tgt) => {
+      this.controls.target.copy(tgt);
+      this.camera.position.copy(tgt).addScaledVector(dir, dist);
+      this._updateClipPlanes();
+      this.controls.update();
+      this.requestRender();
+      this.onViewChange?.();
+    };
+
+    this._animation = null;
+    if (!animate) {
+      apply(direction, distance, target);
+      return;
+    }
+
+    const startOffset = this.camera.position.clone().sub(this.controls.target);
+    const startDir = startOffset.clone().normalize();
+    const startDist = startOffset.length();
+    const startTarget = this.controls.target.clone();
+    const rotation = new THREE.Quaternion().setFromUnitVectors(startDir, direction);
+    const identity = new THREE.Quaternion();
+    const started = performance.now();
+    const duration = 220;
+
+    this._animation = () => {
+      const t = Math.min((performance.now() - started) / duration, 1);
+      const eased = t * t * (3 - 2 * t);
+      const q = identity.clone().slerp(rotation, eased);
+      apply(
+        startDir.clone().applyQuaternion(q).normalize(),
+        THREE.MathUtils.lerp(startDist, distance, eased),
+        startTarget.clone().lerp(target, eased),
+      );
+      if (t >= 1) this._animation = null;
+    };
   }
 
   /** Changes any subset of the lighting settings (preset, rotation, intensity, ground, background). */
@@ -201,7 +260,8 @@ export class Viewer {
 
     this.scene.environmentRotation.y = THREE.MathUtils.degToRad(this.lighting.rotation);
     this.scene.environmentIntensity = this.lighting.intensity;
-    this.scene.background.setHex(BACKGROUNDS[this.lighting.background] ?? BACKGROUNDS.dark);
+    // Either a named background or a custom colour such as "#dfe6ee".
+    this.scene.background.set(BACKGROUNDS[this.lighting.background] ?? this.lighting.background);
     this._updateShadowSetup();
     this.requestRender();
   }
@@ -246,7 +306,7 @@ export class Viewer {
     if (!part) return;
     part.mesh.material.dispose();
     part.mesh.material = createMaterial(part);
-    if (this.selectedId === id) part.mesh.material.emissive.copy(SELECT_EMISSIVE);
+    if (this.highlighted.has(id)) part.mesh.material.emissive.copy(SELECT_EMISSIVE);
     this.requestRender();
   }
 
@@ -263,15 +323,74 @@ export class Viewer {
     this.requestRender();
   }
 
-  select(id) {
-    if (this.selectedId !== null && this.parts[this.selectedId]) {
-      this.parts[this.selectedId].mesh.material.emissive.setScalar(0);
-    }
-    this.selectedId = id;
-    if (id !== null && this.parts[id]) {
-      this.parts[id].mesh.material.emissive.copy(SELECT_EMISSIVE);
+  /** Tints the given parts so the user can see which ones an entry refers to. */
+  setHighlight(ids) {
+    this.highlighted = new Set(ids);
+    for (const part of this.parts) {
+      part.mesh.material.emissive.copy(this.highlighted.has(part.id) ? SELECT_EMISSIVE : BLACK);
     }
     this.requestRender();
+  }
+
+  getViewState() {
+    return {
+      position: this.camera.position.toArray(),
+      target: this.controls.target.toArray(),
+      fov: this.camera.fov,
+    };
+  }
+
+  applyViewState(view) {
+    this.camera.position.fromArray(view.position);
+    this.controls.target.fromArray(view.target);
+    this.camera.fov = view.fov;
+    this._updateClipPlanes();
+    this.controls.update();
+    this.requestRender();
+    this.onViewChange?.();
+  }
+
+  setFov(fov) {
+    // Dolly so the model keeps its apparent size while the perspective changes.
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const scale = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) / Math.tan(THREE.MathUtils.degToRad(fov) / 2);
+    this.camera.position.copy(this.controls.target).addScaledVector(offset, scale);
+    this.camera.fov = fov;
+    this._updateClipPlanes();
+    this.controls.update();
+    this.requestRender();
+    this.onViewChange?.();
+  }
+
+  _updateClipPlanes() {
+    const distance = this.camera.position.distanceTo(this.bounds.center);
+    const radius = this.bounds.radius;
+    this.camera.near = Math.max((distance - radius * 2) / 10, radius / 1000);
+    this.camera.far = distance + radius * 80;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * The largest rectangle with the given aspect ratio that fits the viewport.
+   * The final rendering shows exactly this region; `fov` is the vertical field
+   * of view a camera with that aspect ratio needs to do so.
+   */
+  getOutputFrame(aspect) {
+    const width = this.canvas.clientWidth;
+    const height = this.canvas.clientHeight;
+    const viewAspect = width / height;
+    let w = width;
+    let h = height;
+    if (aspect > viewAspect) h = width / aspect;
+    else w = height * aspect;
+    const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) * (h / height);
+    return {
+      x: (width - w) / 2,
+      y: (height - h) / 2,
+      width: w,
+      height: h,
+      fov: THREE.MathUtils.radToDeg(2 * Math.atan(tanHalf)),
+    };
   }
 
   _handleClick(event) {
@@ -290,9 +409,7 @@ export class Viewer {
     this._raycaster.setFromCamera(pointer, this.camera);
     const visible = this.parts.filter((p) => p.mesh.visible).map((p) => p.mesh);
     const hit = this._raycaster.intersectObjects(visible, false)[0];
-    const id = hit ? hit.object.userData.partId : null;
-    this.select(id);
-    this.onSelect?.(id);
+    this.onPartClick?.(hit ? hit.object.userData.partId : null);
   }
 
   _resize() {
@@ -303,11 +420,13 @@ export class Viewer {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.requestRender();
+    this.onViewChange?.();
   }
 
   _tick() {
+    if (this._animation) this._animation();
     // With damping enabled, update() keeps firing 'change' until the motion settles.
-    this.controls.update();
+    else this.controls.update();
     if (!this._needsRender) return;
     this._needsRender = false;
     this.renderer.render(this.scene, this.camera);
