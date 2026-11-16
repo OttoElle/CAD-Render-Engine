@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CAD Render Engine</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <header>
+          <h1>CAD Render Engine</h1>
+          <button id="open-btn" class="primary">STEP öffnen …</button>
+          <input id="file-input" type="file" accept=".step,.stp,.STEP,.STP" hidden />
+        </header>
+        <section id="model-info" hidden>
+          <div id="model-name"></div>
+          <div id="model-stats"></div>
+        </section>
+        <section id="parts-section" hidden>
+          <h2>Bauteile</h2>
+          <ul id="parts-list"></ul>
+        </section>
+      </aside>
+      <main id="stage">
+        <canvas id="viewport"></canvas>
+        <div id="toolbar" hidden>
+          <button data-view="iso" title="Isometrische Ansicht">Iso</button>
+          <button data-view="front" title="Ansicht von vorne">Vorne</button>
+          <button data-view="right" title="Ansicht von rechts">Rechts</button>
+          <button data-view="top" title="Ansicht von oben">Oben</button>
+          <span class="sep"></span>
+          <button id="fit-btn" title="Modell einpassen (F)">Einpassen</button>
+          <button id="edges-btn" title="Kanten ein- und ausblenden (E)" aria-pressed="true">Kanten</button>
+        </div>
+        <div id="dropzone">
+          <div class="dropzone-inner">
+            <strong>STEP-Datei hierher ziehen</strong>
+            <span>oder links „STEP öffnen …“ wählen (.step, .stp)</span>
+          </div>
+        </div>
+        <div id="status" hidden></div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
