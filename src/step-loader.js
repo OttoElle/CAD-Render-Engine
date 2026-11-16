@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createMaterial } from './materials.js';
 
 let worker = null;
 let nextId = 1;
@@ -67,30 +68,24 @@ export async function loadStepFile(file) {
         ? new THREE.Color().setRGB(data.color[0], data.color[1], data.color[2], THREE.SRGBColorSpace)
         : DEFAULT_COLOR.clone();
 
-      const material = new THREE.MeshStandardMaterial({
-        color,
-        metalness: 0.1,
-        roughness: 0.55,
-        side: THREE.DoubleSide,
-      });
-
       const baseName = data.name || node.name || 'Bauteil';
       const count = (usedNames.get(baseName) || 0) + 1;
       usedNames.set(baseName, count);
 
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = baseName;
-
-      parts.push({
+      const part = {
         id: parts.length,
         name: baseName,
         instance: count,
         path: here,
-        mesh,
         edgePositions: data.edges,
-        color,
+        cadColor: color,
+        materialId: 'cad',
+        colorHex: `#${color.getHexString()}`,
         triangles: data.index.length / 3,
-      });
+      };
+      part.mesh = new THREE.Mesh(geometry, createMaterial(part));
+      part.mesh.name = baseName;
+      parts.push(part);
     }
     for (const child of node.children || []) visit(child, here);
   };

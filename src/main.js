@@ -1,5 +1,7 @@
 import { Viewer } from './viewer.js';
 import { loadStepFile } from './step-loader.js';
+import { MATERIALS, defaultColor } from './materials.js';
+import { LIGHT_PRESETS } from './environment.js';
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -29,7 +31,7 @@ function renderPartsList(parts) {
 
     const swatch = document.createElement('span');
     swatch.className = 'swatch';
-    swatch.style.background = `#${part.color.getHexString()}`;
+    swatch.style.background = part.colorHex;
 
     const name = document.createElement('span');
     name.className = 'part-name';
@@ -43,7 +45,7 @@ function renderPartsList(parts) {
     item.addEventListener('click', () => {
       const id = viewer.selectedId === part.id ? null : part.id;
       viewer.select(id);
-      highlightSelected(id);
+      onSelectionChanged(id);
     });
     item.addEventListener('dblclick', () => {
       const hidden = item.classList.toggle('hidden-part');
@@ -75,6 +77,7 @@ async function openFile(file) {
     const parts = await loadStepFile(file);
     viewer.setParts(parts);
     renderPartsList(parts);
+    refreshMaterialPanel();
 
     const triangles = parts.reduce((sum, part) => sum + part.triangles, 0);
     $('#model-name').textContent = file.name;
@@ -142,11 +145,103 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'e' || event.key === 'E') toggleEdges();
   if (event.key === 'Escape') {
     viewer.select(null);
-    highlightSelected(null);
+    onSelectionChanged(null);
   }
 });
 
-viewer.onSelect = highlightSelected;
+// --- Material ---------------------------------------------------------------
+
+const materialSelect = $('#material-select');
+const materialColor = $('#material-color');
+const materialTarget = $('#material-target');
+
+for (const material of MATERIALS) {
+  materialSelect.add(new Option(material.label, material.id));
+}
+
+/** Parts the material controls act on: the selected part, or all parts if none is selected. */
+function targetParts() {
+  if (viewer.selectedId !== null) return [viewer.parts[viewer.selectedId]];
+  return viewer.parts;
+}
+
+function refreshMaterialPanel() {
+  const targets = targetParts();
+  const hasModel = viewer.parts.length > 0;
+  materialSelect.disabled = !hasModel;
+  materialColor.disabled = !hasModel;
+  if (!hasModel) {
+    materialTarget.textContent = 'Kein Modell geladen';
+    return;
+  }
+  materialTarget.textContent =
+    viewer.selectedId !== null ? targets[0].label : `Alle Bauteile (${targets.length})`;
+
+  // Show a value only if all target parts agree on it.
+  const sameMaterial = targets.every((part) => part.materialId === targets[0].materialId);
+  materialSelect.value = sameMaterial ? targets[0].materialId : '';
+  const sameColor = targets.every((part) => part.colorHex === targets[0].colorHex);
+  if (sameColor) materialColor.value = targets[0].colorHex;
+}
+
+function updateSwatch(part) {
+  const swatch = partsList.querySelector(`li[data-part-id="${part.id}"] .swatch`);
+  if (swatch) swatch.style.background = part.colorHex;
+}
+
+materialSelect.addEventListener('change', () => {
+  for (const part of targetParts()) {
+    part.materialId = materialSelect.value;
+    part.colorHex = defaultColor(part, part.materialId);
+    viewer.updatePartMaterial(part.id);
+    updateSwatch(part);
+  }
+  refreshMaterialPanel();
+});
+
+materialColor.addEventListener('input', () => {
+  for (const part of targetParts()) {
+    part.colorHex = materialColor.value;
+    viewer.updatePartMaterial(part.id);
+    updateSwatch(part);
+  }
+});
+
+function onSelectionChanged(id) {
+  highlightSelected(id);
+  refreshMaterialPanel();
+}
+
+// --- Lighting ---------------------------------------------------------------
+
+const lightPreset = $('#light-preset');
+for (const preset of LIGHT_PRESETS) {
+  lightPreset.add(new Option(preset.label, preset.id));
+}
+lightPreset.value = viewer.lighting.presetId;
+lightPreset.addEventListener('change', () => viewer.setLighting({ presetId: lightPreset.value }));
+
+$('#light-rotation').addEventListener('input', (event) => {
+  const rotation = Number(event.target.value);
+  $('#light-rotation-value').textContent = `${rotation}°`;
+  viewer.setLighting({ rotation });
+});
+
+$('#light-intensity').addEventListener('input', (event) => {
+  const percent = Number(event.target.value);
+  $('#light-intensity-value').textContent = `${percent} %`;
+  viewer.setLighting({ intensity: percent / 100 });
+});
+
+$('#background-select').addEventListener('change', (event) => {
+  viewer.setLighting({ background: event.target.value });
+});
+
+$('#ground-toggle').addEventListener('change', (event) => {
+  viewer.setLighting({ ground: event.target.checked });
+});
+
+viewer.onSelect = onSelectionChanged;
 
 // Exposed for automated tests and debugging in the browser console.
 window.__cadViewer = viewer;

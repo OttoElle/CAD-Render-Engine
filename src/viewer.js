@@ -1,10 +1,17 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { createMaterial } from './materials.js';
+import { buildEnvironmentTexture, getLightPreset, keyLightDirection } from './environment.js';
 
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
 
 // View directions in CAD coordinates (Z up), pointing from the model to the camera.
+const BACKGROUNDS = {
+  dark: 0x16181c,
+  grey: 0xc9ccd1,
+  white: 0xffffff,
+};
+
 const VIEW_DIRECTIONS = {
   iso: [1, -1, 0.8],
   front: [0, -1, 0],
@@ -21,15 +28,44 @@ export class Viewer {
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // Neutral tone mapping keeps material colours true, which matters for product shots.
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.VSMShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x16181c);
+    this.scene.background = new THREE.Color(BACKGROUNDS.dark);
 
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
+    this._pmrem = new THREE.PMREMGenerator(this.renderer);
+    this._envTarget = null;
+    /** Equirectangular HDR texture of the current lighting, reused by the path tracer. */
+    this.environmentTexture = null;
+
+    // Only used to cast the ground shadow; the image-based lighting does the shading.
+    this.shadowLight = new THREE.DirectionalLight(0xffffff, 0.001);
+    this.shadowLight.castShadow = true;
+    this.shadowLight.shadow.mapSize.set(2048, 2048);
+    this.shadowLight.shadow.blurSamples = 16;
+    this.scene.add(this.shadowLight, this.shadowLight.target);
+
+    this.ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.ShadowMaterial({ opacity: 0.3, depthWrite: false }),
+    );
+    this.ground.rotation.x = -Math.PI / 2;
+    this.ground.receiveShadow = true;
+    this.ground.visible = false;
+    this.ground.raycast = () => {};
+    this.scene.add(this.ground);
+
+    this.lighting = {
+      presetId: 'studio-soft',
+      rotation: 0,
+      intensity: 1,
+      ground: true,
+      background: 'dark',
+    };
 
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.1, 1000);
     this.camera.position.set(1, 1, 1);
@@ -61,6 +97,7 @@ export class Viewer {
 
     new ResizeObserver(() => this._resize()).observe(canvas.parentElement);
     this._resize();
+    this.setLighting({});
     this.renderer.setAnimationLoop(() => this._tick());
   }
 
@@ -84,6 +121,7 @@ export class Viewer {
 
     for (const part of parts) {
       part.mesh.userData.partId = part.id;
+      part.mesh.castShadow = true;
       // Prefer the real CAD edges from the importer; fall back to crease detection.
       let edgeGeometry;
       if (part.edgePositions) {
@@ -107,6 +145,8 @@ export class Viewer {
     const box = new THREE.Box3().setFromObject(this.modelRoot);
     box.getBoundingSphere(this.bounds);
     if (!(this.bounds.radius > 0)) this.bounds.radius = 1;
+    this._groundY = box.min.y;
+    this._updateShadowSetup();
 
     this.setView('iso');
   }
@@ -142,6 +182,71 @@ export class Viewer {
     this.camera.far = distance + radius * 20;
     this.camera.updateProjectionMatrix();
     this.controls.update();
+    this.requestRender();
+  }
+
+  /** Changes any subset of the lighting settings (preset, rotation, intensity, ground, background). */
+  setLighting(changes) {
+    const presetChanged = 'presetId' in changes && changes.presetId !== this.lighting.presetId;
+    Object.assign(this.lighting, changes);
+    const preset = getLightPreset(this.lighting.presetId);
+
+    if (presetChanged || !this.environmentTexture) {
+      this.environmentTexture?.dispose();
+      this._envTarget?.dispose();
+      this.environmentTexture = buildEnvironmentTexture(preset);
+      this._envTarget = this._pmrem.fromEquirectangular(this.environmentTexture);
+      this.scene.environment = this._envTarget.texture;
+    }
+
+    this.scene.environmentRotation.y = THREE.MathUtils.degToRad(this.lighting.rotation);
+    this.scene.environmentIntensity = this.lighting.intensity;
+    this.scene.background.setHex(BACKGROUNDS[this.lighting.background] ?? BACKGROUNDS.dark);
+    this._updateShadowSetup();
+    this.requestRender();
+  }
+
+  _updateShadowSetup() {
+    const preset = getLightPreset(this.lighting.presetId);
+    const { center, radius } = this.bounds;
+    const hasModel = this.parts.length > 0;
+
+    this.ground.visible = hasModel && this.lighting.ground;
+    this.shadowLight.visible = this.ground.visible;
+    if (!hasModel) return;
+
+    const direction = keyLightDirection(preset).applyAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      THREE.MathUtils.degToRad(this.lighting.rotation),
+    );
+    this.shadowLight.target.position.copy(center);
+    this.shadowLight.position.copy(center).addScaledVector(direction, radius * 4);
+
+    // The shadow can fall far to the side when the key light is low.
+    const extent = radius * 3;
+    const camera = this.shadowLight.shadow.camera;
+    camera.left = -extent;
+    camera.right = extent;
+    camera.top = extent;
+    camera.bottom = -extent;
+    camera.near = radius * 0.5;
+    camera.far = radius * 12;
+    camera.updateProjectionMatrix();
+    this.shadowLight.shadow.radius = preset.shadow.radius;
+    this.shadowLight.shadow.bias = -0.0005;
+
+    this.ground.material.opacity = preset.shadow.opacity;
+    this.ground.scale.setScalar(radius * 12);
+    this.ground.position.set(center.x, this._groundY ?? center.y - radius, center.z);
+  }
+
+  /** Rebuilds the three.js material of a part after its materialId or colour changed. */
+  updatePartMaterial(id) {
+    const part = this.parts[id];
+    if (!part) return;
+    part.mesh.material.dispose();
+    part.mesh.material = createMaterial(part);
+    if (this.selectedId === id) part.mesh.material.emissive.copy(SELECT_EMISSIVE);
     this.requestRender();
   }
 

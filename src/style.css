@@ -28,7 +28,7 @@ body {
 
 #app {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 280px 1fr 260px;
   height: 100%;
 }
 
@@ -244,6 +244,79 @@ button[aria-pressed='true'] {
 #status.error {
   border-color: #ff6b6b;
   color: #ffb3b3;
+}
+
+#inspector {
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+#inspector section {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 14px;
+}
+
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 16px 0;
+}
+
+.fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fields label > span {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.fields label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.fields label.check > span {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.hint {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+select,
+input[type='color'] {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  width: 100%;
+}
+
+input[type='color'] {
+  height: 32px;
+  padding: 2px;
+}
+
+input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+select:disabled,
+input:disabled {
+  opacity: 0.5;
 }
 
 [hidden] {

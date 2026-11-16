@@ -7,7 +7,7 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 ## Stand
 
 - [x] **Schritt 1:** STEP-Import und Echtzeit-Ansicht
-- [ ] **Schritt 2:** Materialien pro Bauteil und Lichtvorlagen
+- [x] **Schritt 2:** Materialien pro Bauteil und Lichtvorlagen
 - [ ] **Schritt 3:** Fotorealistisches Rendern (Path Tracing auf der GPU) und PNG-Export
 - [ ] **Schritt 4:** Baugruppen-Komfort und Feinschliff
 
@@ -39,6 +39,7 @@ Testmodell liegt unter `samples/Bracket.step`.
 | Verschieben | Rechte Maustaste ziehen |
 | Zoomen | Mausrad |
 | Bauteil auswählen | Klick im Modell oder in der Liste |
+| Material zuweisen | Bauteil auswählen, dann rechts Material und Farbe wählen. Ohne Auswahl gilt die Änderung für alle Bauteile |
 | Bauteil ein- und ausblenden | Doppelklick in der Liste |
 | Modell einpassen | `F` |
 | Kanten ein- und ausblenden | `E` |
@@ -53,4 +54,8 @@ Testmodell liegt unter `samples/Bracket.step`.
   pro Bauteil.
 - `src/viewer.js` ist die Echtzeit-Ansicht mit Kamera, Auswahl und
   Standardansichten.
+- `src/materials.js` enthält die Materialbibliothek (Metalle, Kunststoffe,
+  Lack, Gummi, Glas).
+- `src/environment.js` erzeugt die Lichtvorlagen als HDR-Umgebung direkt im
+  Code, sodass keine großen HDRI-Dateien geladen werden müssen.
 - `src/main.js` verbindet Oberfläche und Ansicht.

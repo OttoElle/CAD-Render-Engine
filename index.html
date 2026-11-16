@@ -42,6 +42,51 @@
         </div>
         <div id="status" hidden></div>
       </main>
+      <aside id="inspector">
+        <section>
+          <h2>Material</h2>
+          <div class="fields">
+            <div id="material-target" class="hint">Kein Modell geladen</div>
+            <label>
+              <span>Material</span>
+              <select id="material-select" disabled></select>
+            </label>
+            <label>
+              <span>Farbe</span>
+              <input id="material-color" type="color" value="#b8bcc4" disabled />
+            </label>
+          </div>
+        </section>
+        <section>
+          <h2>Beleuchtung</h2>
+          <div class="fields">
+            <label>
+              <span>Vorlage</span>
+              <select id="light-preset"></select>
+            </label>
+            <label>
+              <span>Drehung <output id="light-rotation-value">0°</output></span>
+              <input id="light-rotation" type="range" min="-180" max="180" step="1" value="0" />
+            </label>
+            <label>
+              <span>Helligkeit <output id="light-intensity-value">100 %</output></span>
+              <input id="light-intensity" type="range" min="20" max="300" step="5" value="100" />
+            </label>
+            <label>
+              <span>Hintergrund</span>
+              <select id="background-select">
+                <option value="dark">Dunkel</option>
+                <option value="grey">Hellgrau</option>
+                <option value="white">Weiß</option>
+              </select>
+            </label>
+            <label class="check">
+              <input id="ground-toggle" type="checkbox" checked />
+              <span>Boden mit Schatten</span>
+            </label>
+          </div>
+        </section>
+      </aside>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>
