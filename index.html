@@ -3,38 +3,41 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CAD Render Engine</title>
+    <title>Clearcoat</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <div id="app">
-      <aside id="sidebar">
-        <header>
-          <h1>CAD Render Engine</h1>
-        </header>
-        <nav id="tree" aria-label="Arbeitsschritte"></nav>
-        <input id="file-input" type="file" accept=".step,.stp,.STEP,.STP" hidden />
-        <input id="hdri-input" type="file" accept=".hdr,.exr,.HDR,.EXR" hidden />
-      </aside>
+      <header id="topbar">
+        <img class="brand" src="/logo/clearcoat-logo.svg" alt="Clearcoat" />
+        <button id="project-chip" title="Projekt"></button>
+      </header>
       <main id="stage">
         <canvas id="viewport"></canvas>
         <div id="output-frame" hidden></div>
-        <section id="panel" hidden></section>
-        <div id="view-controls" hidden>
-          <div id="viewcube-host"></div>
-          <div id="view-tools">
-            <button id="fit-btn" title="Modell einpassen (F)">Einpassen</button>
-            <button id="edges-btn" title="Kanten ein- und ausblenden (E)" aria-pressed="true">Kanten</button>
-          </div>
-        </div>
+        <div id="focus-marker" hidden></div>
         <div id="dropzone">
           <div class="dropzone-inner">
             <strong>STEP-Datei hierher ziehen</strong>
-            <span>oder links unter „Geometrie“ eine Datei öffnen (.step, .stp)</span>
+            <span>oder unter „Geometrie“ öffnen (.step, .stp)</span>
           </div>
         </div>
         <div id="render-view" hidden></div>
+        <aside id="sidebar">
+          <nav id="tree" aria-label="Arbeitsschritte"></nav>
+        </aside>
+        <section id="panel" hidden></section>
+        <div id="toolbar" hidden>
+          <button id="fit-btn" title="Modell einpassen (F)"></button>
+          <button id="edges-btn" title="Kanten ein- und ausblenden (E)" aria-pressed="true"></button>
+        </div>
+        <div id="viewcube-host" hidden></div>
         <div id="status" hidden></div>
+        <input id="file-input" type="file" accept=".step,.stp,.STEP,.STP" hidden />
+        <input id="hdri-input" type="file" accept=".hdr,.exr,.HDR,.EXR" hidden />
       </main>
     </div>
     <script type="module" src="/src/main.js"></script>

@@ -1,17 +1,43 @@
-import { state, newId } from './state.js';
+import {
+  state,
+  newId,
+  defaultScene,
+  defaultLighting,
+  defaultCamera,
+  defaultOutput,
+  QUALITY,
+  OUTPUT_SIZES,
+  RENDER_DEVICES,
+} from './state.js';
 import { getMaterialDef } from './materials.js';
 import { getLightPreset } from './environment.js';
 
 /**
- * Keeps the user's settings across reloads in localStorage: scene, lighting
- * and output globally, and materials and saved views per STEP file name.
- * A custom HDRI is not stored because the file itself is not available later.
+ * Projects and templates, kept in the browser.
+ *
+ * A project is one rendering job: its model, materials, scene, lighting,
+ * camera, saved views and output settings. The settings live in localStorage;
+ * the STEP file and a custom HDRI are too large for that and go to IndexedDB,
+ * so a project opens again complete with its model.
+ *
+ * A template is a reusable set of settings without a model. Its materials
+ * remember the part names they were assigned to, so they find their parts
+ * again in a new revision of the same assembly.
  */
 
-const SETTINGS_KEY = 'cad-render-engine:settings';
-const modelKey = (fileName) => `cad-render-engine:model:${fileName}`;
+const PROJECTS_KEY = 'cad-render-engine:projects';
+const TEMPLATES_KEY = 'cad-render-engine:templates';
+// Settings of the version before projects existed; used once as defaults.
+const LEGACY_SETTINGS_KEY = 'cad-render-engine:settings';
 
+let index = null;
+let templates = [];
 let saveTimer = null;
+let suspended = false;
+let viewProvider = () => null;
+let pendingPalette = null;
+
+const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
 function read(key) {
   try {
@@ -29,41 +55,201 @@ function write(key, value) {
   }
 }
 
-function saveNow() {
-  const custom = state.lighting.presetId === 'custom';
-  write(SETTINGS_KEY, {
-    scene: {
-      ...state.scene,
-      background: state.scene.background === 'environment' ? 'grey' : state.scene.background,
-    },
-    lighting: {
-      presetId: custom ? 'studio-soft' : state.lighting.presetId,
-      rotation: state.lighting.rotation,
-      intensity: state.lighting.intensity,
-    },
-    output: state.output,
-  });
+// --- Files in IndexedDB -------------------------------------------------------
 
-  if (state.fileName && state.parts.length > 0) {
-    write(modelKey(state.fileName), {
-      partCount: state.parts.length,
-      materials: state.materials.map((entry) => ({
-        materialId: entry.materialId,
-        colorHex: entry.colorHex,
-        partIds: [...entry.partIds],
-      })),
-      views: state.views.map(({ name, position, target, fov }) => ({ name, position, target, fov })),
-    });
+let dbPromise = null;
+
+function openDb() {
+  dbPromise ??= new Promise((resolve, reject) => {
+    const request = indexedDB.open('cad-render-engine', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('files');
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return dbPromise;
+}
+
+async function withStore(mode, run) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('files', mode);
+    const request = run(transaction.objectStore('files'));
+    transaction.oncomplete = () => resolve(request?.result);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+const warn = (error) => console.warn('File storage failed.', error);
+
+export const fileKeys = {
+  step: (projectId) => `step:${projectId}`,
+  hdri: (projectId) => `hdri:${projectId}`,
+  templateHdri: (templateId) => `hdri:template:${templateId}`,
+};
+
+/** Stored files. Failures are not fatal: the project then simply opens without its file. */
+export const files = {
+  put: (key, file) => withStore('readwrite', (store) => store.put({ name: file.name, blob: file }, key)).catch(warn),
+  get: (key) =>
+    withStore('readonly', (store) => store.get(key))
+      .then((entry) => (entry ? new File([entry.blob], entry.name) : null))
+      .catch(() => null),
+  delete: (key) => withStore('readwrite', (store) => store.delete(key)).catch(warn),
+  async copy(from, to) {
+    const file = await files.get(from);
+    if (file) await files.put(to, file);
+    else await files.delete(to);
+  },
+};
+
+// --- Snapshots ----------------------------------------------------------------
+
+/** Copies `saved` over `defaults`, ignoring unknown keys and values of the wrong type. */
+function mergeTyped(defaults, saved) {
+  const result = { ...defaults };
+  if (!saved || typeof saved !== 'object') return result;
+  for (const key of Object.keys(defaults)) {
+    const value = saved[key];
+    if (value === undefined) continue;
+    if (defaults[key] === null || typeof value === typeof defaults[key]) result[key] = value;
   }
+  return result;
+}
+
+function settingsSnapshot() {
+  return {
+    scene: { ...state.scene },
+    lighting: { ...state.lighting },
+    camera: { ...state.camera },
+    output: { ...state.output },
+  };
+}
+
+function modelSnapshot() {
+  return {
+    fileName: state.fileName,
+    partCount: state.parts.length,
+    materials: state.materials.map((entry) => ({
+      materialId: entry.materialId,
+      colorHex: entry.colorHex,
+      partIds: [...entry.partIds],
+    })),
+    views: state.views.map(({ name, position, target, fov, roll }) => ({ name, position, target, fov, roll })),
+    hidden: state.parts.filter((part) => !part.mesh.visible).map((part) => part.id),
+    view: viewProvider(),
+  };
+}
+
+function blankRecord(name) {
+  return { id: uid(), name, fileName: null, partCount: 0, materials: [], views: [], hidden: [], view: null };
+}
+
+function syncSummaries() {
+  state.projects = index.projects.map(({ id, name, fileName }) => ({ id, name, fileName }));
+  state.templates = templates.map(({ id, name }) => ({ id, name }));
+}
+
+/** Puts the scene, lighting, camera and output settings of a project or template into the state. */
+export function applySettings(record) {
+  state.scene = mergeTyped(defaultScene(), record.scene);
+  state.lighting = mergeTyped(defaultLighting(), record.lighting);
+  if (state.lighting.presetId !== 'custom') {
+    state.lighting.presetId = getLightPreset(state.lighting.presetId).id;
+    state.lighting.hdriName = null;
+    if (state.scene.background === 'environment') state.scene.background = 'light';
+  }
+  state.camera = mergeTyped(defaultCamera(), record.camera);
+  state.output = mergeTyped(defaultOutput(), record.output);
+  if (!OUTPUT_SIZES[state.output.size]) state.output.size = 'view';
+  if (!QUALITY[state.output.quality]) state.output.quality = 'standard';
+  if (!RENDER_DEVICES[state.output.device]) state.output.device = 'gpu';
+}
+
+/**
+ * Restores materials and saved views for the model that was just loaded, if
+ * the project was last saved with the same file (by name and part count).
+ * Returns the hidden parts and the camera to restore, or null.
+ */
+export function applyModelData(record) {
+  if (!record || record.fileName !== state.fileName || record.partCount !== state.parts.length) return null;
+  const valid = (id) => Number.isInteger(id) && id >= 0 && id < state.parts.length;
+  state.materials = (record.materials || []).map((entry) => ({
+    id: newId(),
+    materialId: getMaterialDef(entry.materialId).id,
+    colorHex: entry.colorHex,
+    partIds: new Set((entry.partIds || []).filter(valid)),
+  }));
+  state.views = (record.views || []).map((view) => ({ id: newId(), ...view }));
+  return { hidden: (record.hidden || []).filter(valid), view: record.view || null };
+}
+
+/**
+ * Recreates template materials and assigns them to the parts with the
+ * remembered names. A template with a single material means "everything in
+ * this material" and gets all parts.
+ */
+export function applyPalette(palette) {
+  const claimed = new Set();
+  const single = (palette || []).length === 1;
+  state.materials = (palette || []).map((item) => {
+    const names = new Set(item.partNames || []);
+    const partIds = new Set();
+    for (const part of state.parts) {
+      if ((!single && !names.has(part.name)) || claimed.has(part.id)) continue;
+      partIds.add(part.id);
+      claimed.add(part.id);
+    }
+    return { id: newId(), materialId: getMaterialDef(item.materialId).id, colorHex: item.colorHex, partIds };
+  });
+}
+
+/** Template materials wait here while the project has no model yet. */
+export function setPendingPalette(palette) {
+  pendingPalette = palette && palette.length > 0 ? palette : null;
+}
+
+export function takePendingPalette() {
+  const palette = pendingPalette;
+  pendingPalette = null;
+  return palette;
+}
+
+// --- Saving -------------------------------------------------------------------
+
+/** The viewer's current camera is saved with the project; main supplies it. */
+export function setViewProvider(provider) {
+  viewProvider = provider;
+}
+
+/** While a project is being switched or loaded, the half-built state must not be saved. */
+export function suspendSaving(value) {
+  suspended = value;
+  if (value) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+}
+
+export function saveNow() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (suspended || !index) return;
+  const record = currentRecord();
+  if (!record) return;
+  record.name = state.project.name.trim() || 'Projekt';
+  Object.assign(record, settingsSnapshot());
+  // Without a model the last saved model data stays, so a failed load loses nothing.
+  if (state.parts.length > 0) Object.assign(record, modelSnapshot());
+  write(PROJECTS_KEY, index);
+  syncSummaries();
 }
 
 /** Saves shortly after the last change, so dragging a slider does not write constantly. */
 export function scheduleSave() {
+  if (suspended) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    saveNow();
-  }, 400);
+  saveTimer = setTimeout(saveNow, 400);
 }
 
 // Do not lose the last change when the tab is closed or reloaded right after it.
@@ -71,41 +257,125 @@ window.addEventListener('pagehide', () => {
   if (saveTimer !== null) saveNow();
 });
 
-/** Restores scene, lighting and output settings at startup. */
-export function restoreSettings() {
-  const saved = read(SETTINGS_KEY);
-  if (!saved) return;
-  if (saved.scene) {
-    if (typeof saved.scene.background === 'string') state.scene.background = saved.scene.background;
-    if (typeof saved.scene.ground === 'boolean') state.scene.ground = saved.scene.ground;
-  }
-  if (saved.lighting) {
-    state.lighting.presetId = getLightPreset(saved.lighting.presetId).id;
-    if (Number.isFinite(saved.lighting.rotation)) state.lighting.rotation = saved.lighting.rotation;
-    if (Number.isFinite(saved.lighting.intensity)) state.lighting.intensity = saved.lighting.intensity;
-  }
-  if (saved.output) {
-    for (const key of Object.keys(state.output)) {
-      if (typeof saved.output[key] === typeof state.output[key]) state.output[key] = saved.output[key];
-    }
-  }
+// --- Projects -----------------------------------------------------------------
+
+export function currentRecord() {
+  return index.projects.find((project) => project.id === index.currentId) || null;
 }
 
-/**
- * Restores materials and views for the model that was just loaded, if the
- * same file (by name and part count) was worked on before. Returns true if
- * anything was restored.
- */
-export function restoreModel() {
-  const saved = read(modelKey(state.fileName));
-  if (!saved || saved.partCount !== state.parts.length) return false;
+/** Loads the stored projects and templates and returns the project to open. */
+export function initProjects() {
+  index = read(PROJECTS_KEY);
+  if (!index || !Array.isArray(index.projects) || index.projects.length === 0) {
+    const first = blankRecord('Projekt 1');
+    const legacy = read(LEGACY_SETTINGS_KEY);
+    if (legacy) {
+      first.lighting = legacy.lighting;
+      first.output = legacy.output;
+      if (legacy.scene) first.scene = { ground: legacy.scene.ground };
+    }
+    index = { currentId: first.id, projects: [first] };
+  }
+  if (!currentRecord()) index.currentId = index.projects[0].id;
+  const savedTemplates = read(TEMPLATES_KEY);
+  templates = Array.isArray(savedTemplates) ? savedTemplates : [];
+  syncSummaries();
+  // Ask the browser not to evict the stored models when disk space runs low.
+  navigator.storage?.persist?.().catch(() => {});
+  return currentRecord();
+}
 
-  state.materials = (saved.materials || []).map((entry) => ({
-    id: newId(),
-    materialId: getMaterialDef(entry.materialId).id,
-    colorHex: entry.colorHex,
-    partIds: new Set((entry.partIds || []).filter((id) => id >= 0 && id < state.parts.length)),
-  }));
-  state.views = (saved.views || []).map((view) => ({ id: newId(), ...view }));
-  return state.materials.length > 0 || state.views.length > 0;
+function uniqueName(base, taken) {
+  if (!taken.includes(base)) return base;
+  let number = 2;
+  while (taken.includes(`${base} ${number}`)) number += 1;
+  return `${base} ${number}`;
+}
+
+export function createProject() {
+  const names = index.projects.map((project) => project.name);
+  let number = index.projects.length + 1;
+  while (names.includes(`Projekt ${number}`)) number += 1;
+  const record = blankRecord(`Projekt ${number}`);
+  index.projects.push(record);
+  write(PROJECTS_KEY, index);
+  syncSummaries();
+  return record;
+}
+
+export async function duplicateProject(id) {
+  const source = index.projects.find((project) => project.id === id);
+  if (!source) return null;
+  const record = JSON.parse(JSON.stringify(source));
+  record.id = uid();
+  record.name = uniqueName(
+    `${source.name} Kopie`,
+    index.projects.map((project) => project.name),
+  );
+  await files.copy(fileKeys.step(source.id), fileKeys.step(record.id));
+  await files.copy(fileKeys.hdri(source.id), fileKeys.hdri(record.id));
+  index.projects.push(record);
+  write(PROJECTS_KEY, index);
+  syncSummaries();
+  return record;
+}
+
+/** Deletes a project and returns the one that is current afterwards. */
+export function deleteProject(id) {
+  index.projects = index.projects.filter((project) => project.id !== id);
+  files.delete(fileKeys.step(id));
+  files.delete(fileKeys.hdri(id));
+  if (index.projects.length === 0) index.projects.push(blankRecord('Projekt 1'));
+  if (!currentRecord()) index.currentId = index.projects[0].id;
+  write(PROJECTS_KEY, index);
+  syncSummaries();
+  return currentRecord();
+}
+
+export function setCurrentProject(id) {
+  const record = index.projects.find((project) => project.id === id);
+  if (!record) return null;
+  index.currentId = id;
+  write(PROJECTS_KEY, index);
+  return record;
+}
+
+// --- Templates ----------------------------------------------------------------
+
+export function getTemplate(id) {
+  return templates.find((template) => template.id === id) || null;
+}
+
+/** Saves the current settings as a template. A template with the same name is replaced. */
+export async function saveTemplate(name) {
+  const existing = templates.find((template) => template.name === name);
+  const template = {
+    id: existing?.id ?? uid(),
+    name,
+    ...settingsSnapshot(),
+    fov: viewProvider()?.fov ?? null,
+    materials: state.materials.map((entry) => ({
+      materialId: entry.materialId,
+      colorHex: entry.colorHex,
+      partNames: [...new Set([...entry.partIds].map((partId) => state.parts[partId]?.name).filter(Boolean))],
+    })),
+  };
+  // The focus point belongs to one model and view, not to a reusable setup.
+  template.camera.focusPoint = null;
+  if (state.lighting.presetId === 'custom') {
+    await files.copy(fileKeys.hdri(state.project.id), fileKeys.templateHdri(template.id));
+  } else {
+    files.delete(fileKeys.templateHdri(template.id));
+  }
+  templates = existing ? templates.map((item) => (item === existing ? template : item)) : [...templates, template];
+  write(TEMPLATES_KEY, templates);
+  syncSummaries();
+  return template;
+}
+
+export function deleteTemplate(id) {
+  templates = templates.filter((template) => template.id !== id);
+  files.delete(fileKeys.templateHdri(id));
+  write(TEMPLATES_KEY, templates);
+  syncSummaries();
 }

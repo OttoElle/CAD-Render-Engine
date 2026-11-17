@@ -1,6 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { WebGPUPathTracer, OIDNDenoiser } from 'three-gpu-pathtracer/webgpu';
+import { PhysicalCamera } from 'three-gpu-pathtracer/src/objects/PhysicalCamera.js';
 import { initUNetFromURL } from 'oidn-webgpu';
+import { fovToFocalLength } from './viewer.js';
 
 // Open Image Denoise model, shipped with the app so rendering works offline.
 const DENOISE_WEIGHTS_URL = `${import.meta.env.BASE_URL}oidn/rt_hdr_alb_nrm_small.tza`;
@@ -64,6 +66,36 @@ function buildRenderScene(viewer, { transparent, ground }) {
   return scene;
 }
 
+const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/**
+ * Requests the graphics device to render on: the graphics card, or with
+ * `kind` 'cpu' the browser's software implementation. Returns the device and
+ * a readable name of what was actually picked.
+ */
+async function requestDevice(kind) {
+  if (!navigator.gpu) throw new Error('Dieser Browser stellt kein WebGPU bereit.');
+  const cpu = kind === 'cpu';
+  const adapter = await navigator.gpu.requestAdapter({
+    featureLevel: 'compatibility',
+    ...(cpu ? { forceFallbackAdapter: true } : { powerPreference: 'high-performance' }),
+  });
+  if (!adapter) {
+    throw new Error(
+      cpu
+        ? 'Dieser Browser bietet kein Rendern auf der CPU an. Bitte unter „Output“ die Grafikkarte wählen.'
+        : 'Es wurde keine Grafikkarte mit WebGPU gefunden.',
+    );
+  }
+  const device = await adapter.requestDevice({ requiredFeatures: [...adapter.features] });
+
+  const info = adapter.info || {};
+  const software = Boolean(info.isFallbackAdapter ?? adapter.isFallbackAdapter);
+  const hardware = info.description || [info.vendor, info.architecture].filter(Boolean).map(capitalize).join(' ');
+  const name = software ? ['CPU', hardware && `(${hardware})`].filter(Boolean).join(' ') : hardware || 'Grafikkarte';
+  return { device, name };
+}
+
 /**
  * Starts a path traced rendering of the current view.
  *
@@ -73,7 +105,7 @@ function buildRenderScene(viewer, { transparent, ground }) {
  * accumulated so far.
  */
 export async function startRender(viewer, options) {
-  const { width, height, transparent, ground, fov, denoise, gentle, onProgress } = options;
+  const { width, height, transparent, ground, fov, denoise, gentle, dof, onProgress } = options;
   // Test hook for trying settings from the console, e.g. window.__renderDebug = { samples: 4 }.
   const debug = window.__renderDebug;
   const samples = debug?.samples ?? options.samples;
@@ -82,11 +114,15 @@ export async function startRender(viewer, options) {
   canvas.width = width;
   canvas.height = height;
 
-  const renderer = new THREE.WebGPURenderer({ canvas, antialias: false, alpha: true, trackTimestamp: true });
-  await renderer.init();
-  if (!renderer.backend.isWebGPUBackend) {
+  const { device, name: deviceName } = await requestDevice(options.device);
+  const renderer = new THREE.WebGPURenderer({ canvas, device, antialias: false, alpha: true, trackTimestamp: true });
+  try {
+    await renderer.init();
+    if (!renderer.backend.isWebGPUBackend) throw new Error('Dieser Browser stellt kein WebGPU bereit.');
+  } catch (error) {
     renderer.dispose();
-    throw new Error('Dieser Browser stellt kein WebGPU bereit.');
+    device.destroy();
+    throw error;
   }
   renderer.setPixelRatio(1);
   renderer.setSize(width, height, false);
@@ -95,9 +131,22 @@ export async function startRender(viewer, options) {
 
   const scene = buildRenderScene(viewer, { transparent, ground });
 
-  const camera = viewer.camera.clone();
+  // With depth of field the camera gets a real aperture; otherwise everything is sharp.
+  const camera = dof ? new PhysicalCamera() : new THREE.PerspectiveCamera();
+  camera.copy(viewer.camera);
+  // The viewport shifts its image to make room for the sidebar; the rendering does not.
+  camera.clearViewOffset();
   camera.aspect = width / height;
   if (fov) camera.fov = fov;
+  if (dof) {
+    // The path tracer reads the aperture diameter in millimetres and assumes a
+    // scene in metres. CAD models are in millimetres, hence the factor 1000.
+    camera.bokehSize = (fovToFocalLength(viewer.camera.fov) / dof.fStop) * 1000;
+    camera.focusDistance = dof.focusDistance;
+    camera.apertureBlades = 0;
+    camera.apertureRotation = 0;
+    camera.anamorphicRatio = 1;
+  }
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld(true);
 
@@ -156,7 +205,7 @@ export async function startRender(viewer, options) {
     fail(
       new Error(
         `Die Grafikkarte hat das Rendering abgebrochen (${info.message || 'Gerät verloren'}). ` +
-          'Versuche eine kleinere Bildgröße oder den schonenden Modus unter „Output“.',
+          'Eine kleinere Bildgröße oder der schonende Modus unter „Output“ können helfen.',
       ),
     );
   };
@@ -184,6 +233,8 @@ export async function startRender(viewer, options) {
       });
     }
     renderer.dispose();
+    // The renderer only destroys devices it created itself.
+    device.destroy();
   }
 
   function frame() {
@@ -224,6 +275,7 @@ export async function startRender(viewer, options) {
 
   return {
     canvas,
+    deviceName,
     done,
     cancel() {
       if (state === 'running' || state === 'finishing') state = 'cancelled';

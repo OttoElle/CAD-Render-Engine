@@ -1,20 +1,26 @@
 import { h } from './dom.js';
+import { icon } from './icons.js';
 import { state, select, materialEntryLabel } from './state.js';
 
-const ICONS = {
-  ok: '✓',
-  todo: '',
-  running: '',
-};
+/** Keys of nodes whose children are folded away. */
+const collapsed = new Set();
+
+export function setCollapsed(key, value) {
+  if (value) collapsed.add(key);
+  else collapsed.delete(key);
+}
 
 function statusIcon(status) {
   if (!status) return h('span', { class: 'node-status none' });
-  return h('span', { class: `node-status ${status}` }, ICONS[status] ?? '');
+  return h('span', { class: `node-status ${status}` }, status === 'ok' ? icon('check', 11) : null);
 }
 
+const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+
 /**
- * Renders the guided tree. `actions` supplies what the plus buttons do:
- * openFile, addMaterial, addView, startRender.
+ * Renders the guided tree. `actions` supplies what the buttons do: openFile,
+ * newProject, addMaterial, addView, startRender, togglePart and hover (tints
+ * parts in the model while the pointer is over their row).
  */
 export function renderTree(container, actions) {
   const loaded = state.parts.length > 0;
@@ -24,12 +30,37 @@ export function renderTree(container, actions) {
 
   const nodes = [
     {
+      key: 'project',
+      label: 'Projekt',
+      detail: state.project.name,
+      status: 'ok',
+      plus: { title: 'Neues Projekt', run: actions.newProject },
+      always: true,
+    },
+    {
       key: 'geometry',
       label: 'Geometrie',
+      count: state.parts.length,
       detail: loaded ? state.fileName : null,
       status: loaded ? 'ok' : 'todo',
       plus: { title: 'STEP-Datei öffnen', run: actions.openFile },
       always: true,
+      children: state.parts.map((part) => {
+        const visible = part.mesh.visible;
+        return {
+          key: `part:${part.id}`,
+          label: part.label,
+          swatch: part.colorHex,
+          dimmed: !visible,
+          hover: [part.id],
+          action: {
+            icon: visible ? 'eye' : 'eyeOff',
+            title: visible ? 'Ausblenden' : 'Einblenden',
+            sticky: !visible,
+            run: () => actions.togglePart(part.id),
+          },
+        };
+      }),
     },
     {
       key: 'materials',
@@ -41,16 +72,17 @@ export function renderTree(container, actions) {
         ...state.materials.map((entry) => ({
           key: `material:${entry.id}`,
           label: materialEntryLabel(entry),
-          detail: `${entry.partIds.size} ${entry.partIds.size === 1 ? 'Bauteil' : 'Bauteile'}`,
+          detail: plural(entry.partIds.size, 'Bauteil', 'Bauteile'),
           swatch: entry.colorHex,
           warn: entry.partIds.size === 0,
+          hover: [...entry.partIds],
         })),
         ...(loaded && unassigned > 0
           ? [
               {
                 key: 'material:cad',
                 label: 'CAD-Farben',
-                detail: `${unassigned} ${unassigned === 1 ? 'Bauteil' : 'Bauteile'}`,
+                detail: plural(unassigned, 'Bauteil', 'Bauteile'),
                 muted: true,
               },
             ]
@@ -90,8 +122,26 @@ export function renderTree(container, actions) {
     },
   ];
 
+  const iconButton = (className, spec, enabled = true) =>
+    h(
+      'button',
+      {
+        class: className,
+        title: spec.title,
+        'aria-label': spec.title,
+        disabled: !enabled,
+        onclick: (event) => {
+          event.stopPropagation();
+          spec.run();
+        },
+      },
+      icon(spec.icon, 14),
+    );
+
   const renderNode = (node, depth) => {
     const enabled = loaded || node.always;
+    const children = node.children || [];
+    const folded = collapsed.has(node.key);
     const row = h(
       'div',
       {
@@ -101,10 +151,13 @@ export function renderTree(container, actions) {
           state.selected === node.key ? 'selected' : '',
           enabled ? '' : 'disabled',
           node.muted ? 'muted' : '',
+          node.dimmed ? 'dimmed' : '',
         ].join(' '),
         role: 'button',
         tabIndex: enabled ? 0 : -1,
+        title: node.detail ? `${node.label} · ${node.detail}` : node.label,
         onclick: () => enabled && select(node.key),
+        onmouseenter: node.hover ? () => actions.hover(node.hover) : null,
         onkeydown: (event) => {
           if (enabled && (event.key === 'Enter' || event.key === ' ')) {
             event.preventDefault();
@@ -112,7 +165,19 @@ export function renderTree(container, actions) {
           }
         },
       },
-      depth === 0 ? statusIcon(node.status) : node.status ? statusIcon(node.status) : null,
+      depth === 0
+        ? children.length > 0
+          ? iconButton('node-toggle', {
+              icon: folded ? 'chevronRight' : 'chevronDown',
+              title: folded ? 'Aufklappen' : 'Zuklappen',
+              run: () => {
+                setCollapsed(node.key, !folded);
+                renderTree(container, actions);
+              },
+            })
+          : h('span', { class: 'node-toggle' })
+        : null,
+      depth === 0 || node.status ? statusIcon(node.status) : null,
       node.swatch ? h('span', { class: 'swatch', style: { background: node.swatch } }) : null,
       h(
         'span',
@@ -121,25 +186,13 @@ export function renderTree(container, actions) {
         node.count ? h('span', { class: 'node-count' }, ` (${node.count})`) : null,
       ),
       node.detail ? h('span', { class: `node-detail${node.warn ? ' warn' : ''}` }, node.detail) : null,
-      node.plus
-        ? h(
-            'button',
-            {
-              class: 'node-plus',
-              title: node.plus.title,
-              'aria-label': node.plus.title,
-              disabled: !enabled,
-              onclick: (event) => {
-                event.stopPropagation();
-                node.plus.run();
-              },
-            },
-            '+',
-          )
-        : null,
+      node.action ? iconButton(`node-action${node.action.sticky ? ' sticky' : ''}`, node.action) : null,
+      node.plus ? iconButton('node-plus', { ...node.plus, icon: 'plus' }, enabled) : null,
     );
-    return [row, ...(node.children || []).flatMap((child) => renderNode(child, depth + 1))];
+    if (folded) return [row];
+    return [row, ...children.flatMap((child) => renderNode(child, depth + 1))];
   };
 
+  container.onmouseleave = () => actions.hover(null);
   container.replaceChildren(...nodes.flatMap((node) => renderNode(node, 0)));
 }

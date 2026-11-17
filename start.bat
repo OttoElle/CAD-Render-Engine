@@ -1,5 +1,5 @@
 @echo off
-rem Starts the CAD Render Engine and opens it in the default browser.
+rem Starts Clearcoat and opens it in the default browser.
 cd /d "%~dp0"
 
 where node >nul 2>nul

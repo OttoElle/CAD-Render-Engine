@@ -1,26 +1,28 @@
 import * as THREE from 'three';
+import { icon } from './icons.js';
 
-// Faces in world space (Y up). The labels follow CAD convention, where Z is up
-// and "front" looks along +Y, which is world -Z.
+// Faces in world space (Y up) with their outward normal in the cube's CSS space
+// (x right, y down, z towards the viewer). The labels follow CAD convention,
+// where Z is up and "front" looks along +Y, which is world -Z.
 const FACES = [
-  { label: 'Vorne', dir: [0, 0, 1], transform: '' },
-  { label: 'Hinten', dir: [0, 0, -1], transform: 'rotateY(180deg)' },
-  { label: 'Rechts', dir: [1, 0, 0], transform: 'rotateY(90deg)' },
-  { label: 'Links', dir: [-1, 0, 0], transform: 'rotateY(-90deg)' },
-  { label: 'Oben', dir: [0, 1, 0], transform: 'rotateX(90deg)' },
-  { label: 'Unten', dir: [0, -1, 0], transform: 'rotateX(-90deg)' },
+  { label: 'Vorne', dir: [0, 0, 1], css: [0, 0, 1], transform: '' },
+  { label: 'Hinten', dir: [0, 0, -1], css: [0, 0, -1], transform: 'rotateY(180deg)' },
+  { label: 'Rechts', dir: [1, 0, 0], css: [1, 0, 0], transform: 'rotateY(90deg)' },
+  { label: 'Links', dir: [-1, 0, 0], css: [-1, 0, 0], transform: 'rotateY(-90deg)' },
+  { label: 'Oben', dir: [0, 1, 0], css: [0, -1, 0], transform: 'rotateX(90deg)' },
+  { label: 'Unten', dir: [0, -1, 0], css: [0, 1, 0], transform: 'rotateX(-90deg)' },
 ];
 
-const SIZE = 64;
+const SIZE = 62;
 const HALF = SIZE / 2;
-const AXIS_LENGTH = SIZE * 1.3;
+const AXIS_LENGTH = SIZE * 1.42;
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
-// Axes start at the front-left-bottom corner. Directions are given in the
-// cube's CSS space (x right, y down, z towards the viewer).
+// Axes start at the front-left-bottom corner, in CSS space.
 const AXES = [
-  { name: 'X', color: '#e5484d', css: [1, 0, 0], transform: '' },
-  { name: 'Y', color: '#46a758', css: [0, 0, -1], transform: 'rotateY(90deg)' },
-  { name: 'Z', color: '#3e63dd', css: [0, -1, 0], transform: 'rotateZ(-90deg)' },
+  { name: 'X', color: '#e5484d', css: [1, 0, 0] },
+  { name: 'Y', color: '#3fb950', css: [0, 0, -1] },
+  { name: 'Z', color: '#4a6cf7', css: [0, -1, 0] },
 ];
 
 function el(tag, className, parent) {
@@ -30,10 +32,18 @@ function el(tag, className, parent) {
   return node;
 }
 
+function svg(tag, attributes, parent) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+  parent?.append(node);
+  return node;
+}
+
 /**
  * Orientation cube in the corner of the viewport. It mirrors the camera
- * orientation; clicking a face or corner turns the view there, and the arrows
- * orbit in 15 degree steps.
+ * orientation; clicking a face or corner turns the view there, the chevrons
+ * orbit and the curved arrows roll in 15 degree steps, and the house returns
+ * to the standard view.
  */
 export class ViewCube {
   constructor(container, viewer) {
@@ -42,6 +52,7 @@ export class ViewCube {
     this.scene = el('div', 'viewcube-scene', this.root);
     this.cube = el('div', 'viewcube-cube', this.scene);
 
+    this.faces = [];
     for (const face of FACES) {
       const node = el('button', 'viewcube-face', this.cube);
       node.type = 'button';
@@ -49,6 +60,7 @@ export class ViewCube {
       node.title = `Ansicht ${face.label}`;
       node.style.transform = `${face.transform} translateZ(${HALF}px)`;
       node.addEventListener('click', () => viewer.lookFrom(new THREE.Vector3(...face.dir)));
+      this.faces.push({ face, node });
     }
 
     // Corners give the eight isometric views.
@@ -60,36 +72,36 @@ export class ViewCube {
           node.title = 'Isometrische Ansicht';
           node.style.transform = `translate3d(${x * HALF}px, ${-y * HALF}px, ${z * HALF}px)`;
           node.addEventListener('click', () => viewer.lookFrom(new THREE.Vector3(x, y, z)));
-          this._corners = this._corners || [];
-          this._corners.push(node);
         }
       }
     }
 
-    this.axisLabels = [];
-    for (const axis of AXES) {
-      const line = el('div', 'viewcube-axis', this.cube);
-      line.style.width = `${AXIS_LENGTH}px`;
-      line.style.background = axis.color;
-      line.style.transform = `translate3d(${-HALF}px, ${HALF}px, ${HALF}px) ${axis.transform}`;
-      const label = el('span', 'viewcube-axis-label', this.scene);
-      label.textContent = axis.name;
-      label.style.color = axis.color;
-      this.axisLabels.push({ axis, label });
-    }
+    // The axes are drawn flat on top, so their arrow heads always face the viewer.
+    const overlay = svg('svg', { class: 'viewcube-axes', viewBox: '-90 -90 180 180' }, this.scene);
+    this.axes = AXES.map((axis) => ({
+      axis,
+      line: svg('line', { stroke: axis.color, 'stroke-width': 1.4, 'stroke-linecap': 'round' }, overlay),
+      head: svg('polygon', { fill: axis.color }, overlay),
+      label: svg('text', { fill: axis.color, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, overlay),
+    }));
+    for (const { axis, label } of this.axes) label.textContent = axis.name;
 
-    const arrows = [
-      { className: 'left', title: 'Nach links drehen', step: [-15, 0], glyph: '◀' },
-      { className: 'right', title: 'Nach rechts drehen', step: [15, 0], glyph: '▶' },
-      { className: 'up', title: 'Nach oben drehen', step: [0, 15], glyph: '▲' },
-      { className: 'down', title: 'Nach unten drehen', step: [0, -15], glyph: '▼' },
+    const buttons = [
+      { className: 'up', title: 'Nach oben drehen', icon: 'chevronUp', run: () => viewer.orbitBy(0, 15) },
+      { className: 'down', title: 'Nach unten drehen', icon: 'chevronDown', run: () => viewer.orbitBy(0, -15) },
+      { className: 'left', title: 'Nach links drehen', icon: 'chevronLeft', run: () => viewer.orbitBy(-15, 0) },
+      { className: 'right', title: 'Nach rechts drehen', icon: 'chevronRight', run: () => viewer.orbitBy(15, 0) },
+      { className: 'home', title: 'Standardansicht', icon: 'home', run: () => viewer.home() },
+      { className: 'roll-left', title: 'Gegen den Uhrzeigersinn rollen', icon: 'rollLeft', run: () => viewer.rollBy(-15) },
+      { className: 'roll-right', title: 'Im Uhrzeigersinn rollen', icon: 'rollRight', run: () => viewer.rollBy(15) },
     ];
-    for (const arrow of arrows) {
-      const node = el('button', `viewcube-arrow ${arrow.className}`, this.root);
+    for (const button of buttons) {
+      const node = el('button', `viewcube-button ${button.className}`, this.root);
       node.type = 'button';
-      node.title = arrow.title;
-      node.textContent = arrow.glyph;
-      node.addEventListener('click', () => viewer.orbitBy(arrow.step[0], arrow.step[1]));
+      node.title = button.title;
+      node.setAttribute('aria-label', button.title);
+      node.append(icon(button.icon, 18));
+      node.addEventListener('click', button.run);
     }
 
     this._matrix = new THREE.Matrix4();
@@ -110,13 +122,42 @@ export class ViewCube {
     ];
     this.cube.style.transform = `matrix3d(${m.map((v) => v.toFixed(5)).join(',')})`;
 
-    // Axis letters stay upright, so they are positioned in 2D at the projected axis tips.
+    // Faces pointing away are drawn dashed, like hidden edges in a drawing.
+    for (const { face, node } of this.faces) {
+      const depth = m[2] * face.css[0] + m[6] * face.css[1] + m[10] * face.css[2];
+      node.classList.toggle('back', depth < 0.02);
+    }
+
+    const project = (point) => [
+      m[0] * point[0] + m[4] * point[1] + m[8] * point[2],
+      m[1] * point[0] + m[5] * point[1] + m[9] * point[2],
+    ];
     const origin = [-HALF, HALF, HALF];
-    for (const { axis, label } of this.axisLabels) {
-      const tip = origin.map((value, i) => value + axis.css[i] * (AXIS_LENGTH + 9));
-      const x = m[0] * tip[0] + m[4] * tip[1] + m[8] * tip[2];
-      const y = m[1] * tip[0] + m[5] * tip[1] + m[9] * tip[2];
-      label.style.transform = `translate(-50%, -50%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+    const [ox, oy] = project(origin);
+    for (const { axis, line, head, label } of this.axes) {
+      const [tx, ty] = project(origin.map((value, i) => value + axis.css[i] * AXIS_LENGTH));
+      const length = Math.hypot(tx - ox, ty - oy);
+      const visible = length > 6;
+      const ux = visible ? (tx - ox) / length : 0;
+      const uy = visible ? (ty - oy) / length : 0;
+      line.setAttribute('x1', ox.toFixed(1));
+      line.setAttribute('y1', oy.toFixed(1));
+      line.setAttribute('x2', (tx - ux * 5).toFixed(1));
+      line.setAttribute('y2', (ty - uy * 5).toFixed(1));
+      head.setAttribute(
+        'points',
+        [
+          [tx, ty],
+          [tx - ux * 8 - uy * 2.6, ty - uy * 8 + ux * 2.6],
+          [tx - ux * 8 + uy * 2.6, ty - uy * 8 - ux * 2.6],
+        ]
+          .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+          .join(' '),
+      );
+      head.style.display = visible ? '' : 'none';
+      // An axis pointing straight at the viewer has no direction on screen; park its letter above the origin.
+      label.setAttribute('x', (visible ? tx + ux * 9 : ox).toFixed(1));
+      label.setAttribute('y', (visible ? ty + uy * 9 : oy - 10).toFixed(1));
     }
   }
 }

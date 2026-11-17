@@ -6,13 +6,24 @@ import { buildEnvironmentTexture, getLightPreset, keyLightDirection, CUSTOM_SHAD
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
 const BLACK = new THREE.Color(0x000000);
 
-// View directions in CAD coordinates (Z up), pointing from the model to the camera.
 const BACKGROUNDS = {
+  light: 0xeef0f3,
   dark: 0x16181c,
   grey: 0xc9ccd1,
   white: 0xffffff,
 };
 
+// Sensor height in millimetres used to express the field of view as a focal length (full frame).
+const SENSOR_HEIGHT = 24;
+
+export const fovToFocalLength = (fov) => SENSOR_HEIGHT / 2 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);
+export const focalLengthToFov = (focalLength) =>
+  THREE.MathUtils.radToDeg(2 * Math.atan(SENSOR_HEIGHT / 2 / focalLength));
+
+/** Below this field of view the camera counts as a parallel projection. */
+const PARALLEL_FOV = 1;
+
+// View directions in CAD coordinates (Z up), pointing from the model to the camera.
 const VIEW_DIRECTIONS = {
   iso: [1, -1, 0.8],
   front: [0, -1, 0],
@@ -36,7 +47,7 @@ export class Viewer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     this.scene = new THREE.Scene();
-    this._backgroundColor = new THREE.Color(BACKGROUNDS.dark);
+    this._backgroundColor = new THREE.Color(BACKGROUNDS.light);
     this.scene.background = this._backgroundColor;
 
     this._pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -66,7 +77,7 @@ export class Viewer {
       rotation: 0,
       intensity: 1,
       ground: true,
-      background: 'dark',
+      background: 'light',
     };
 
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.1, 1000);
@@ -75,10 +86,19 @@ export class Viewer {
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.12;
+    // Only flags here: the roll is re-applied in _syncCamera before anyone looks at the camera.
     this.controls.addEventListener('change', () => {
-      this.requestRender();
-      this.onViewChange?.();
+      this._needsRender = true;
+      this._viewChanged = true;
     });
+
+    /** Camera roll around the viewing axis in radians. Orbit controls always level the camera, so it is re-applied after each update. */
+    this.roll = 0;
+    /** Width in pixels on the left that floating UI covers; the view is centred in the rest. */
+    this.inset = 0;
+    this._insetTarget = 0;
+    this._viewChanged = false;
+    this._perspectiveFov = 35;
 
     // CAD models are Z-up, three.js and HDRI lighting are Y-up.
     this.modelRoot = new THREE.Group();
@@ -88,10 +108,12 @@ export class Viewer {
     this.parts = [];
     this.highlighted = new Set();
     this.edgesVisible = true;
-    /** Called with the part id (or null) when the user clicks in the viewport. */
+    /** Called with the part id (or null) and the hit point when the user clicks in the viewport. */
     this.onPartClick = null;
     /** Aspect ratio of the final image, or null if it follows the viewport. */
     this.outputAspect = null;
+    /** Space in pixels kept around the output frame, so its border does not touch the window edge. */
+    this.outputMargin = 0;
     /** Called whenever the camera or the viewport size changes. */
     this.onViewChange = null;
     this.bounds = new THREE.Sphere(new THREE.Vector3(), 1);
@@ -113,6 +135,44 @@ export class Viewer {
 
   requestRender() {
     this._needsRender = true;
+  }
+
+  /** Runs the orbit controls and re-applies the roll they remove. */
+  _syncCamera() {
+    this.controls.update();
+    if (this.roll) this.camera.rotateZ(this.roll);
+  }
+
+  _notifyView() {
+    this._needsRender = true;
+    this._viewChanged = false;
+    this.onViewChange?.();
+  }
+
+  /** Reserves space on the left for floating UI. The view glides over to the new centre. */
+  setInset(pixels, immediate = false) {
+    this._insetTarget = Math.max(pixels, 0);
+    if (immediate) {
+      this.inset = this._insetTarget;
+      this._applyViewOffset();
+      this._notifyView();
+    }
+  }
+
+  _applyViewOffset() {
+    const width = Math.max(this.canvas.clientWidth, 1);
+    const height = Math.max(this.canvas.clientHeight, 1);
+    // Shifts the image so that the optical centre sits in the middle of the free area.
+    if (this.inset > 0.5) this.camera.setViewOffset(width, height, -this.inset / 2, 0, width, height);
+    else this.camera.clearViewOffset();
+  }
+
+  /** The part of the viewport that is not covered by floating UI. */
+  getFreeRegion() {
+    const width = this.canvas.clientWidth;
+    const height = this.canvas.clientHeight;
+    const inset = Math.min(this.inset, width * 0.7);
+    return { x: inset, y: 0, width: Math.max(width - inset, 1), height: Math.max(height, 1) };
   }
 
   setParts(parts) {
@@ -154,10 +214,11 @@ export class Viewer {
     this.modelRoot.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(this.modelRoot);
     box.getBoundingSphere(this.bounds);
-    if (!(this.bounds.radius > 0)) this.bounds.radius = 1;
-    this._groundY = box.min.y;
+    if (!(this.bounds.radius > 0)) this.bounds.set(new THREE.Vector3(), 1);
+    this._groundY = Number.isFinite(box.min.y) ? box.min.y : 0;
     this._updateShadowSetup();
 
+    this.roll = 0;
     this.setView('iso');
   }
 
@@ -176,10 +237,11 @@ export class Viewer {
   _frame(direction) {
     const { center, radius } = this.bounds;
     // Fit into the output frame, which is what the final image shows.
-    const frame = this.getOutputFrame(this.outputAspect ?? this.camera.aspect);
+    const region = this.getFreeRegion();
+    const frame = this.getOutputFrame(this.outputAspect ?? region.width / region.height);
     const vFov = THREE.MathUtils.degToRad(frame.fov);
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (frame.width / frame.height));
-    const distance = (radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.05;
+    const distance = (radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.08;
     this._moveCamera(center, direction, distance, false);
   }
 
@@ -204,7 +266,7 @@ export class Viewer {
 
   _moveCamera(target, direction, distance, animate) {
     // Looking straight along the up axis is degenerate for orbit controls; nudge it.
-    if (Math.abs(direction.y) > 0.9999) {
+    if (Math.hypot(direction.x, direction.z) < 0.0005) {
       direction.set(0, Math.sign(direction.y), 0.0005).normalize();
     }
 
@@ -212,9 +274,8 @@ export class Viewer {
       this.controls.target.copy(tgt);
       this.camera.position.copy(tgt).addScaledVector(dir, dist);
       this._updateClipPlanes();
-      this.controls.update();
-      this.requestRender();
-      this.onViewChange?.();
+      this._syncCamera();
+      this._notifyView();
     };
 
     this._animation = null;
@@ -374,17 +435,19 @@ export class Viewer {
       position: this.camera.position.toArray(),
       target: this.controls.target.toArray(),
       fov: this.camera.fov,
+      roll: this.roll,
     };
   }
 
   applyViewState(view) {
+    this._animation = null;
     this.camera.position.fromArray(view.position);
     this.controls.target.fromArray(view.target);
     this.camera.fov = view.fov;
+    this.roll = view.roll || 0;
     this._updateClipPlanes();
-    this.controls.update();
-    this.requestRender();
-    this.onViewChange?.();
+    this._syncCamera();
+    this._notifyView();
   }
 
   setFov(fov) {
@@ -394,9 +457,83 @@ export class Viewer {
     this.camera.position.copy(this.controls.target).addScaledVector(offset, scale);
     this.camera.fov = fov;
     this._updateClipPlanes();
-    this.controls.update();
-    this.requestRender();
-    this.onViewChange?.();
+    this._syncCamera();
+    this._notifyView();
+  }
+
+  get focalLength() {
+    return fovToFocalLength(this.camera.fov);
+  }
+
+  setFocalLength(focalLength) {
+    this.setFov(focalLengthToFov(focalLength));
+  }
+
+  /** A parallel projection is approximated by a very long lens far away from the model. */
+  get parallel() {
+    return this.camera.fov <= PARALLEL_FOV * 1.5;
+  }
+
+  setParallel(parallel) {
+    if (parallel === this.parallel) return;
+    if (parallel) {
+      this._perspectiveFov = this.camera.fov;
+      this.setFov(PARALLEL_FOV);
+    } else {
+      this.setFov(this._perspectiveFov);
+    }
+  }
+
+  /** Rolls the camera around its viewing axis by the given angle in degrees. */
+  rollBy(degrees) {
+    this.setPose({ roll: THREE.MathUtils.radToDeg(this.roll) + degrees });
+  }
+
+  /** Back to the levelled standard view with the model fitted. */
+  home() {
+    this.roll = 0;
+    this.setView('iso');
+  }
+
+  /**
+   * The camera as numbers: `azimuth` (0° = front, 90° = right) and `elevation`
+   * in degrees around the pivot, `roll` in degrees, `distance` in model units
+   * and the pivot `target` in CAD coordinates (Z up).
+   */
+  getPose() {
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const distance = offset.length();
+    const target = this.controls.target;
+    return {
+      azimuth: THREE.MathUtils.radToDeg(Math.atan2(offset.x, offset.z)),
+      elevation: THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(offset.y / distance, -1, 1))),
+      roll: THREE.MathUtils.radToDeg(this.roll),
+      distance,
+      target: [target.x, -target.z, target.y],
+    };
+  }
+
+  /** Changes any subset of the values returned by getPose(). */
+  setPose(changes) {
+    const pose = { ...this.getPose(), ...changes };
+    const azimuth = THREE.MathUtils.degToRad(pose.azimuth);
+    const elevation = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(pose.elevation, -89.95, 89.95));
+    const direction = new THREE.Vector3(
+      Math.cos(elevation) * Math.sin(azimuth),
+      Math.sin(elevation),
+      Math.cos(elevation) * Math.cos(azimuth),
+    );
+    // Keep the roll within -180° to 180°.
+    this.roll = THREE.MathUtils.degToRad(THREE.MathUtils.euclideanModulo(pose.roll + 180, 360) - 180);
+    const [x, y, z] = pose.target;
+    this._moveCamera(new THREE.Vector3(x, z, -y), direction, Math.max(pose.distance, 1e-3), false);
+  }
+
+  /** Distance of a world point from the camera, measured along the viewing axis. */
+  depthOf(point) {
+    this.camera.updateMatrixWorld();
+    const forward = this.camera.getWorldDirection(new THREE.Vector3());
+    return point.clone().sub(this.camera.position).dot(forward);
   }
 
   _updateClipPlanes() {
@@ -408,22 +545,23 @@ export class Viewer {
   }
 
   /**
-   * The largest rectangle with the given aspect ratio that fits the viewport.
-   * The final rendering shows exactly this region; `fov` is the vertical field
-   * of view a camera with that aspect ratio needs to do so.
+   * The largest rectangle with the given aspect ratio that fits the free part
+   * of the viewport. The final rendering shows exactly this region; `fov` is
+   * the vertical field of view a camera with that aspect ratio needs to do so.
    */
   getOutputFrame(aspect) {
-    const width = this.canvas.clientWidth;
-    const height = this.canvas.clientHeight;
-    const viewAspect = width / height;
-    let w = width;
-    let h = height;
-    if (aspect > viewAspect) h = width / aspect;
-    else w = height * aspect;
-    const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) * (h / height);
+    const region = this.getFreeRegion();
+    const { width, height } = region;
+    const availableWidth = Math.max(width - 2 * this.outputMargin, 1);
+    const availableHeight = Math.max(height - 2 * this.outputMargin, 1);
+    let w = availableWidth;
+    let h = availableHeight;
+    if (aspect > availableWidth / availableHeight) h = availableWidth / aspect;
+    else w = availableHeight * aspect;
+    const tanHalf = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) * (h / this.canvas.clientHeight);
     return {
-      x: (width - w) / 2,
-      y: (height - h) / 2,
+      x: region.x + (width - w) / 2,
+      y: region.y + (height - h) / 2,
       width: w,
       height: h,
       fov: THREE.MathUtils.radToDeg(2 * Math.atan(tanHalf)),
@@ -442,11 +580,12 @@ export class Viewer {
       ((event.clientX - rect.left) / rect.width) * 2 - 1,
       -((event.clientY - rect.top) / rect.height) * 2 + 1,
     );
+    this._syncCamera();
     this.camera.updateMatrixWorld();
     this._raycaster.setFromCamera(pointer, this.camera);
     const visible = this.parts.filter((p) => p.mesh.visible).map((p) => p.mesh);
     const hit = this._raycaster.intersectObjects(visible, false)[0];
-    this.onPartClick?.(hit ? hit.object.userData.partId : null);
+    this.onPartClick?.(hit ? hit.object.userData.partId : null, hit ? hit.point.clone() : null);
   }
 
   _resize() {
@@ -456,14 +595,26 @@ export class Viewer {
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
-    this.requestRender();
-    this.onViewChange?.();
+    this._applyViewOffset();
+    this._notifyView();
   }
 
   _tick() {
     if (this._animation) this._animation();
     // With damping enabled, update() keeps firing 'change' until the motion settles.
-    else this.controls.update();
+    else this._syncCamera();
+
+    if (this.inset !== this._insetTarget) {
+      const delta = this._insetTarget - this.inset;
+      this.inset = Math.abs(delta) < 1 ? this._insetTarget : this.inset + delta * 0.3;
+      this._applyViewOffset();
+      this._viewChanged = true;
+      this._needsRender = true;
+    }
+    if (this._viewChanged) {
+      this._viewChanged = false;
+      this.onViewChange?.();
+    }
     if (!this._needsRender) return;
     this._needsRender = false;
     this.renderer.render(this.scene, this.camera);

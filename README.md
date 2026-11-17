@@ -1,4 +1,6 @@
-# CAD Render Engine
+# Clearcoat
+
+<img src="public/logo/clearcoat-logo.svg" alt="Clearcoat" height="48" />
 
 Eine leichtgewichtige Web-App, um aus CAD-Modellen (STEP) Renderings für
 Präsentationen und Dokumentationen zu erstellen. Alles läuft lokal im Browser:
@@ -11,34 +13,49 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 3:** Fotorealistisches Rendern (Path Tracing auf der GPU) und PNG-Export,
   geführter Baum und Steuerungswürfel
 - [x] **Schritt 4:** Entrauschen, eigene HDRI-Umgebungen, gespeicherte Einstellungen
+- [x] **Schritt 5:** Projekte und Vorlagen, helle Oberfläche mit schwebender
+  Seitenleiste, genaue Kamerasteuerung mit Tiefenunschärfe, Wahl des Rendergeräts
 
 ## Ablauf
 
-Die linke Seitenleiste führt als Baum durch alle Schritte. Jeder Eintrag hat
-sinnvolle Standardwerte, sodass man direkt rendern kann. Ein Klick öffnet die
-Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
+Die schwebende Seitenleiste führt als Baum durch alle Schritte. Jeder Eintrag
+hat sinnvolle Standardwerte, sodass man direkt rendern kann. Ein Klick öffnet
+die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
 
-1. **Geometrie:** STEP-Datei öffnen (Plus oder Drag-and-drop), Bauteile ein- und ausblenden.
-2. **Materialien:** Das Plus legt ein Material an. Bauteile werden in der Liste
+1. **Projekt:** Ein Projekt ist ein Rendering-Auftrag mit Namen. Es merkt sich
+   Modell, Materialien, Szene, Licht, Kamera, Ansichten und Output und öffnet
+   sich beim nächsten Start wieder vollständig. Projekte lassen sich wechseln,
+   duplizieren und löschen. Eine **Vorlage** speichert die Einstellungen ohne
+   Modell, um sie in anderen Projekten wieder anzuwenden.
+2. **Geometrie:** STEP-Datei öffnen (Plus oder Drag-and-drop). Die Bauteile
+   stehen als aufklappbare Liste darunter, das Auge blendet sie ein und aus.
+   Ein Klick auf ein Bauteil, im Baum oder im Modell, öffnet es mit Sichtbarkeit
+   und Material.
+3. **Materialien:** Das Plus legt ein Material an. Bauteile werden in der Liste
    angehakt oder direkt im Modell angeklickt. Gleiche Bauteile, etwa alle
    Schrauben einer Größe, werden auf Wunsch gemeinsam zugewiesen. Bauteile
    ohne Material behalten ihre CAD-Farbe.
-3. **Szene:** Hintergrundfarbe und Boden mit Schatten.
-4. **Beleuchtung:** Lichtvorlage oder eigene HDRI-Datei (.hdr, .exr), Drehung und Helligkeit.
+4. **Szene:** Hintergrundfarbe und Boden mit Schatten.
+5. **Beleuchtung:** Lichtvorlage oder eigene HDRI-Datei (.hdr, .exr), Drehung und Helligkeit.
    Eine HDRI-Datei lässt sich auch einfach ins Fenster ziehen.
-5. **Perspektive:** Blickwinkel einstellen, das Plus speichert die aktuelle Ansicht.
-6. **Output:** Bildgröße, Qualität, transparenter Hintergrund und Entrauschen.
-   Ein Rahmen in der Ansicht zeigt genau den Bildausschnitt, der gerendert
-   wird. Der schonende Modus hilft auf Laptops und schwächeren Grafikkarten.
-7. **Renderings:** Das Plus startet ein Rendering. Fertige Bilder bleiben als
+6. **Perspektive:** Brennweite oder Parallelprojektion, Kamera in Zahlen
+   (Drehung, Höhe, Rollen, Abstand, Drehpunkt) und Tiefenunschärfe mit Blende
+   und wählbarem Fokuspunkt. Das Plus speichert die aktuelle Ansicht.
+7. **Output:** Bildgröße, Qualität, transparenter Hintergrund, Entrauschen und
+   das Rendergerät (Grafikkarte oder CPU). Ein Rahmen in der Ansicht zeigt
+   genau den Bildausschnitt, der gerendert wird. Der schonende Modus hilft auf
+   Laptops und schwächeren Grafikkarten.
+8. **Renderings:** Das Plus startet ein Rendering. Fertige Bilder bleiben als
    Einträge stehen und lassen sich als PNG speichern.
 
-Szene, Beleuchtung und Output bleiben beim Neuladen erhalten, Materialien und
-gespeicherte Ansichten merkt sich die App pro STEP-Datei (im Browser, über den
-Dateinamen).
+Projekte und Vorlagen liegen im Speicher des Browsers (Einstellungen im
+localStorage, STEP- und HDRI-Dateien in IndexedDB). Sie gelten also pro
+Browser und Rechner.
 
 Das Rendern braucht einen Browser mit WebGPU, also ein aktuelles Chrome oder
-Edge. Die Echtzeit-Ansicht läuft in jedem aktuellen Browser.
+Edge. Die Echtzeit-Ansicht läuft in jedem aktuellen Browser. Das Rendern auf
+der CPU nutzt die Software-Umsetzung des Browsers und ist um ein Vielfaches
+langsamer als eine Grafikkarte.
 
 ## Starten
 
@@ -67,8 +84,10 @@ Testmodell liegt unter `samples/Bracket.step`.
 | Drehen | Linke Maustaste ziehen |
 | Verschieben | Rechte Maustaste ziehen |
 | Zoomen | Mausrad |
-| Standardansichten | Flächen und Ecken des Würfels oben rechts anklicken |
+| Standardansichten | Flächen und Ecken des Würfels unten rechts anklicken |
 | In 15°-Schritten drehen | Pfeile am Würfel |
+| In 15°-Schritten rollen | Runde Pfeile am Würfel |
+| Zurück zur Standardansicht | Haus am Würfel |
 | Modell einpassen | `F` |
 | Kanten ein- und ausblenden | `E` |
 
@@ -80,7 +99,7 @@ Testmodell liegt unter `samples/Bracket.step`.
 - `src/step-loader.js` wandelt das Ergebnis in three.js-Geometrie um, ein Mesh
   pro Bauteil.
 - `src/viewer.js` ist die Echtzeit-Ansicht (WebGL) mit Kamera, Boden und
-  Bildausschnitt, `src/viewcube.js` der Steuerungswürfel.
+  Bildausschnitt, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.
 - `src/materials.js` enthält die Materialbibliothek, `src/environment.js`
   erzeugt die Lichtvorlagen als HDR-Umgebung direkt im Code.
 - `src/render.js` rendert das Endbild mit
@@ -88,7 +107,7 @@ Testmodell liegt unter `samples/Bracket.step`.
   auf WebGPU in einer eigenen, unsichtbaren Zeichenfläche.
   Das Entrauschen übernimmt Open Image Denoise, das Modell dazu liegt unter
   `public/oidn/`.
-- `src/persistence.js` speichert Einstellungen im Browser.
+- `src/persistence.js` speichert Projekte und Vorlagen im Browser.
 - `src/state.js` hält alle Einstellungen, `src/tree.js` zeichnet den Baum,
   `src/panels.js` die Einstellungen zum gewählten Eintrag, `src/main.js`
   verbindet alles.
