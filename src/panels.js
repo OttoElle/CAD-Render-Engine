@@ -208,6 +208,17 @@ function projectPanel({ actions }) {
         h('button', { onclick: actions.duplicateProject }, 'Duplizieren'),
         confirmButton('Löschen', actions.deleteProject),
       ),
+      importNotice(actions),
+      h(
+        'div',
+        {
+          class: 'button-row',
+          title: 'Eine Projektdatei (.clearcoat) enthält Einstellungen, Ansichten, das STEP-Modell und eine eigene HDRI',
+        },
+        h('button', { onclick: actions.importProject }, 'Importieren'),
+        h('button', { onclick: actions.exportProject }, 'Exportieren'),
+      ),
+      h('p', { class: 'hint' }, 'Zum Weiterarbeiten an einem anderen Rechner: hier exportieren, dort importieren.'),
       h('h3', null, 'Vorlagen'),
       state.templates.length > 0
         ? h(
@@ -244,6 +255,27 @@ function projectPanel({ actions }) {
       currentName.textContent = state.project.name;
     },
   };
+}
+
+/** Asks whether an imported project replaces the one of the same origin that is already here. */
+function importNotice(actions) {
+  const pending = actions.pendingImport();
+  if (!pending) return null;
+  const date = pending.exportedAt
+    ? ` Die Datei wurde am ${pending.exportedAt.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })} exportiert.`
+    : '';
+  return h(
+    'div',
+    { class: 'notice' },
+    h('p', null, `„${pending.name}“ ist hier schon vorhanden.${date} Ersetzen oder als Kopie importieren?`),
+    h(
+      'div',
+      { class: 'button-row' },
+      h('button', { class: 'primary', onclick: () => actions.finishImport(true) }, 'Ersetzen'),
+      h('button', { onclick: () => actions.finishImport(false) }, 'Als Kopie'),
+      h('button', { onclick: actions.cancelImport }, 'Abbrechen'),
+    ),
+  );
 }
 
 function geometryPanel({ actions }) {

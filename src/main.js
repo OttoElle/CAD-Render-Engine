@@ -10,6 +10,8 @@ import {
   createProject,
   duplicateProject,
   deleteProject,
+  getProject,
+  importProject,
   setCurrentProject,
   applySettings,
   applyModelData,
@@ -38,6 +40,7 @@ import {
   safeFileName,
   zipFiles,
 } from './export.js';
+import { PROJECT_EXTENSION, packProject, unpackProject } from './project-file.js';
 import { renderTree, setCollapsed } from './tree.js';
 import { renderPanel, identicalParts } from './panels.js';
 import { h } from './dom.js';
@@ -69,6 +72,7 @@ const stageEl = $('#stage');
 const sidebarEl = $('#sidebar');
 const fileInput = $('#file-input');
 const hdriInput = $('#hdri-input');
+const projectInput = $('#project-input');
 const dropzone = $('#dropzone');
 const statusEl = $('#status');
 const treeEl = $('#tree');
@@ -784,6 +788,57 @@ async function applyTemplate(id) {
   setStatus(`Vorlage „${template.name}“ angewendet`, { timeout: 2500 });
 }
 
+// --- Project files ------------------------------------------------------------
+
+/** A project file waiting for the decision whether it replaces the project of the same name. */
+let pendingImport = null;
+
+/** Saves the current project with its model and HDRI as one file. */
+function exportProject() {
+  saveNow();
+  const record = getProject(state.project.id);
+  if (!record) return;
+  return exporting('Projekt wird exportiert …', async () => {
+    const step = record.fileName ? await files.get(fileKeys.step(record.id)) : null;
+    const hdri = state.lighting.presetId === 'custom' ? await files.get(fileKeys.hdri(record.id)) : null;
+    const blob = await packProject(record, { step, hdri });
+    downloadBlob(blob, `${fileBase()}.${PROJECT_EXTENSION}`);
+  });
+}
+
+async function importProjectFile(file) {
+  if (!file) return;
+  let data;
+  try {
+    setStatus(`Lese ${file.name} …`);
+    data = await unpackProject(file);
+    setStatus('');
+  } catch (error) {
+    console.error(error);
+    setStatus(error.message, { error: true, timeout: 6000 });
+    return;
+  }
+  if (getProject(data.record.id)) {
+    // The same project already exists here, probably from an earlier exchange: ask first.
+    pendingImport = data;
+    select('project');
+    emit('project');
+    return;
+  }
+  await finishImport(data, false);
+}
+
+async function finishImport(data, replace) {
+  pendingImport = null;
+  // Replacing the open project: its pending changes must not be written over the imported one.
+  if (replace && data.record.id === state.project.id) suspendSaving(true);
+  else saveNow();
+  const record = await importProject(data.record, { step: data.step, hdri: data.hdri, replace });
+  setCurrentProject(record.id);
+  await openProject(record);
+  setStatus(`Projekt „${record.name}“ importiert`, { timeout: 3000 });
+}
+
 // --- Tree and panel -----------------------------------------------------------
 
 function selectionHighlight() {
@@ -818,6 +873,18 @@ const actions = {
     setStatus(`Vorlage „${name}“ gespeichert`, { timeout: 2500 });
   },
   applyTemplate,
+  exportProject,
+  importProject: () => projectInput.click(),
+  pendingImport: () =>
+    pendingImport && {
+      name: getProject(pendingImport.record.id)?.name ?? pendingImport.record.name,
+      exportedAt: pendingImport.exportedAt,
+    },
+  finishImport: (replace) => pendingImport && finishImport(pendingImport, replace),
+  cancelImport: () => {
+    pendingImport = null;
+    emit('project');
+  },
   deleteTemplate: (id) => {
     deleteTemplate(id);
     emit('project');
@@ -1026,6 +1093,12 @@ async function openHdri(file) {
   }
 }
 
+projectInput.addEventListener('change', () => {
+  const file = projectInput.files[0];
+  projectInput.value = '';
+  importProjectFile(file);
+});
+
 hdriInput.addEventListener('change', () => {
   const file = hdriInput.files[0];
   hdriInput.value = '';
@@ -1049,8 +1122,9 @@ window.addEventListener('drop', (event) => {
   dragDepth = 0;
   dropzone.classList.remove('dragover');
   const file = event.dataTransfer?.files?.[0];
-  // Dropping an HDRI sets it as lighting.
+  // Dropping an HDRI sets it as lighting, a project file imports the project.
   if (file && /\.(hdr|exr)$/i.test(file.name)) openHdri(file);
+  else if (file && file.name.toLowerCase().endsWith(`.${PROJECT_EXTENSION}`)) importProjectFile(file);
   else openFile(file);
 });
 

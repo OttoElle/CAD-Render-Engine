@@ -77,9 +77,12 @@ function dosDateTime(date) {
   return { time, day };
 }
 
+const pipe = (blob, stream) => new Response(blob.stream().pipeThrough(stream)).blob();
+
 /**
- * Packs files ({ name, blob }) into a ZIP archive. Images are already
- * compressed, so they are stored as they are, which keeps this fast.
+ * Packs files ({ name, blob, compress }) into a ZIP archive. Images are
+ * already compressed and are stored as they are, which keeps this fast;
+ * `compress` shrinks text such as STEP files.
  */
 export async function zipFiles(files) {
   const encoder = new TextEncoder();
@@ -89,20 +92,22 @@ export async function zipFiles(files) {
   let offset = 0;
 
   for (const file of files) {
-    const data = new Uint8Array(await file.blob.arrayBuffer());
+    const raw = new Uint8Array(await file.blob.arrayBuffer());
     const name = encoder.encode(file.name);
-    const crc = crc32(data);
+    const crc = crc32(raw);
+    const method = file.compress ? 8 : 0;
+    const data = method === 8 ? new Uint8Array(await (await pipe(file.blob, new CompressionStream('deflate-raw'))).arrayBuffer()) : raw;
 
     const local = new DataView(new ArrayBuffer(30));
     local.setUint32(0, 0x04034b50, true);
     local.setUint16(4, 20, true); // version needed
     local.setUint16(6, 0x0800, true); // file names in UTF-8
-    local.setUint16(8, 0, true); // stored
+    local.setUint16(8, method, true); // 0 = stored, 8 = deflated
     local.setUint16(10, time, true);
     local.setUint16(12, day, true);
     local.setUint32(14, crc, true);
     local.setUint32(18, data.length, true);
-    local.setUint32(22, data.length, true);
+    local.setUint32(22, raw.length, true);
     local.setUint16(26, name.length, true);
     local.setUint16(28, 0, true);
     parts.push(local, name, data);
@@ -112,12 +117,12 @@ export async function zipFiles(files) {
     central.setUint16(4, 20, true); // version made by
     central.setUint16(6, 20, true);
     central.setUint16(8, 0x0800, true);
-    central.setUint16(10, 0, true);
+    central.setUint16(10, method, true);
     central.setUint16(12, time, true);
     central.setUint16(14, day, true);
     central.setUint32(16, crc, true);
     central.setUint32(20, data.length, true);
-    central.setUint32(24, data.length, true);
+    central.setUint32(24, raw.length, true);
     central.setUint16(28, name.length, true);
     central.setUint32(42, offset, true);
     directory.push(central, name);
@@ -133,6 +138,54 @@ export async function zipFiles(files) {
   end.setUint32(12, directorySize, true);
   end.setUint32(16, offset, true);
   return new Blob([...parts, ...directory, end], { type: 'application/zip' });
+}
+
+/**
+ * Reads the files of a ZIP archive as [{ name, blob }]. Handles stored and
+ * deflated entries, which covers our own archives and those of common tools.
+ */
+export async function unzipFiles(blob) {
+  const notZip = () => new Error('Die Datei ist kein gültiges Archiv.');
+  // The end record sits in the last 22 bytes, followed by an optional comment of up to 64 KB.
+  const tailStart = Math.max(blob.size - 65557, 0);
+  const tail = new DataView(await blob.slice(tailStart).arrayBuffer());
+  let end = -1;
+  for (let i = tail.byteLength - 22; i >= 0; i--) {
+    if (tail.getUint32(i, true) === 0x06054b50) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) throw notZip();
+  const count = tail.getUint16(end + 10, true);
+  const directorySize = tail.getUint32(end + 12, true);
+  const directoryOffset = tail.getUint32(end + 16, true);
+  const directory = new DataView(await blob.slice(directoryOffset, directoryOffset + directorySize).arrayBuffer());
+  const decoder = new TextDecoder();
+
+  const files = [];
+  let at = 0;
+  for (let n = 0; n < count; n++) {
+    if (directory.getUint32(at, true) !== 0x02014b50) throw notZip();
+    const method = directory.getUint16(at + 10, true);
+    const compressedSize = directory.getUint32(at + 20, true);
+    const nameLength = directory.getUint16(at + 28, true);
+    const extraLength = directory.getUint16(at + 30, true);
+    const commentLength = directory.getUint16(at + 32, true);
+    const localOffset = directory.getUint32(at + 42, true);
+    const name = decoder.decode(new Uint8Array(directory.buffer, at + 46, nameLength));
+    at += 46 + nameLength + extraLength + commentLength;
+    if (name.endsWith('/')) continue; // a folder
+
+    const local = new DataView(await blob.slice(localOffset, localOffset + 30).arrayBuffer());
+    if (local.getUint32(0, true) !== 0x04034b50) throw notZip();
+    const start = localOffset + 30 + local.getUint16(26, true) + local.getUint16(28, true);
+    const data = blob.slice(start, start + compressedSize);
+    if (method === 0) files.push({ name, blob: data });
+    else if (method === 8) files.push({ name, blob: await pipe(data, new DecompressionStream('deflate-raw')) });
+    else throw new Error(`„${name}“ ist in einem unbekannten Format gepackt.`);
+  }
+  return files;
 }
 
 // --- Video ------------------------------------------------------------------------

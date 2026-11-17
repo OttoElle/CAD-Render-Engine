@@ -23,6 +23,7 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 10:** Explosionsansicht für Baugruppen
 - [x] **Schritt 11:** Warteschlange, alle Ansichten in einem Rutsch, JPG und
   Drehteller als Video oder Bildserie
+- [x] **Schritt 12:** Projekte als Datei exportieren und importieren
 
 ## Ablauf
 
@@ -33,8 +34,13 @@ die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
 1. **Projekt:** Ein Projekt ist ein Rendering-Auftrag mit Namen. Es merkt sich
    Modell, Materialien, Szene, Licht, Kamera, Ansichten und Output und öffnet
    sich beim nächsten Start wieder vollständig. Projekte lassen sich wechseln,
-   duplizieren und löschen. Eine **Vorlage** speichert die Einstellungen ohne
-   Modell, um sie in anderen Projekten wieder anzuwenden.
+   duplizieren und löschen. „Exportieren“ speichert ein Projekt samt
+   STEP-Modell und eigener HDRI als eine `.clearcoat`-Datei, „Importieren“
+   (oder die Datei ins Fenster ziehen) holt es auf einem anderen Rechner
+   wieder herein. Kommt ein Projekt zurück, das es dort schon gibt, fragt die
+   App, ob es ersetzt oder als Kopie angelegt wird. Eine **Vorlage** speichert
+   die Einstellungen ohne Modell, um sie in anderen Projekten wieder
+   anzuwenden.
 2. **Geometrie:** STEP-Datei öffnen (Plus oder Drag-and-drop). Die Bauteile
    stehen als aufklappbare Liste darunter, das Auge blendet sie ein und aus.
    Ein Klick auf ein Bauteil, im Baum oder im Modell, öffnet es mit Sichtbarkeit
@@ -90,7 +96,9 @@ die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
 
 Projekte und Vorlagen liegen im Speicher des Browsers (Einstellungen im
 localStorage, STEP- und HDRI-Dateien in IndexedDB). Sie gelten also pro
-Browser und Rechner.
+Browser und Rechner; zwischen Rechnern wandern sie als Projektdatei. Eine
+`.clearcoat`-Datei ist ein ZIP-Archiv mit `project.json`, dem Modell und der
+HDRI.
 
 Das Rendern braucht einen Browser mit WebGPU, also ein aktuelles Chrome oder
 Edge. Die Echtzeit-Ansicht läuft in jedem aktuellen Browser. Das Rendern auf
@@ -143,8 +151,8 @@ Testmodell liegt unter `samples/Bracket.step`.
 - `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen.
 - `src/backdrop.js` baut Boden, Hohlkehle und Farbverläufe für Ansicht und Rendering.
 - `src/explode.js` berechnet die Verschiebungen der Explosionsansicht.
-- `src/export.js` speichert Bilder als PNG oder JPG, packt ZIP-Archive und
-  nimmt Drehteller-Videos auf, ohne zusätzliche Bibliotheken.
+- `src/export.js` speichert Bilder als PNG oder JPG, packt und liest
+  ZIP-Archive und nimmt Drehteller-Videos auf, ohne zusätzliche Bibliotheken.
 - `src/materials.js` enthält die Materialbibliothek und die Schliffbilder,
   `src/environment.js` erzeugt die Lichtvorlagen und Softboxen als
   HDR-Umgebung direkt im Code.
@@ -153,7 +161,9 @@ Testmodell liegt unter `samples/Bracket.step`.
   auf WebGPU in einer eigenen, unsichtbaren Zeichenfläche.
   Das Entrauschen übernimmt Open Image Denoise, das Modell dazu liegt unter
   `public/oidn/`.
-- `src/persistence.js` speichert Projekte und Vorlagen im Browser.
+- `src/persistence.js` speichert Projekte und Vorlagen im Browser,
+  `src/project-file.js` packt ein Projekt in eine `.clearcoat`-Datei und liest
+  sie wieder.
 - `src/state.js` hält alle Einstellungen, `src/tree.js` zeichnet den Baum,
   `src/panels.js` die Einstellungen zum gewählten Eintrag, `src/main.js`
   verbindet alles.

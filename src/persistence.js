@@ -403,6 +403,40 @@ export function deleteProject(id) {
   return currentRecord();
 }
 
+/** The stored record of a project, as it is written to a project file. */
+export function getProject(id) {
+  return index.projects.find((project) => project.id === id) || null;
+}
+
+/**
+ * Stores a project read from a project file, with its STEP model and HDRI.
+ * With `replace`, it overwrites the project with the same id (the same
+ * project, coming back from another computer). Otherwise it is added, under
+ * a new id if that one is taken, and under a free name.
+ */
+export async function importProject(data, { step, hdri, replace }) {
+  const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : 'Importiertes Projekt';
+  const record = { ...blankRecord(name), ...data, name };
+  const existing = replace ? getProject(data.id) : null;
+  if (existing) {
+    index.projects = index.projects.map((project) => (project === existing ? record : project));
+  } else {
+    if (typeof data.id !== 'string' || getProject(data.id)) record.id = uid();
+    record.name = uniqueName(
+      name,
+      index.projects.map((project) => project.name),
+    );
+    index.projects.push(record);
+  }
+  if (step) await files.put(fileKeys.step(record.id), step);
+  else await files.delete(fileKeys.step(record.id));
+  if (hdri) await files.put(fileKeys.hdri(record.id), hdri);
+  else await files.delete(fileKeys.hdri(record.id));
+  write(PROJECTS_KEY, index);
+  syncSummaries();
+  return record;
+}
+
 export function setCurrentProject(id) {
   const record = index.projects.find((project) => project.id === id);
   if (!record) return null;

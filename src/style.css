@@ -693,6 +693,16 @@ button.node-toggle:hover {
   min-width: 0;
 }
 
+.notice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  font-size: 13px;
+}
+
 .button-column {
   display: flex;
   flex-direction: column;
