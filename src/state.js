@@ -39,7 +39,9 @@ export const defaultLighting = () => ({
 export const defaultCamera = () => ({ dof: false, fStop: 4, focusPoint: null });
 export const defaultSectionCap = () => ({ mode: 'material', color: '#d9534f' });
 export const defaultOutput = () => ({
-  size: 'view',
+  /** Proportions (see OUTPUT_ASPECTS) and the longer side in pixels; `width`/`height` for a custom size. */
+  aspect: 'view',
+  resolution: 1920,
   width: 1920,
   height: 1080,
   quality: 'standard',
@@ -113,13 +115,35 @@ export const QUALITY = {
   ultra: { label: 'Sehr hoch', samples: 4096 },
 };
 
-export const OUTPUT_SIZES = {
+/** Image proportions; `ratio` is width / height. "Wie Ansicht" follows the free part of the viewport. */
+export const OUTPUT_ASPECTS = {
   view: { label: 'Wie Ansicht' },
-  hd: { label: 'Full HD 16:9 (1920 × 1080)', width: 1920, height: 1080 },
-  square: { label: 'Quadrat (1920 × 1920)', width: 1920, height: 1920 },
-  uhd: { label: '4K 16:9 (3840 × 2160)', width: 3840, height: 2160 },
-  portrait: { label: 'Hochformat 4:5 (1600 × 2000)', width: 1600, height: 2000 },
-  custom: { label: 'Eigene Größe' },
+  '16:9': { label: 'Querformat 16:9', ratio: 16 / 9 },
+  '3:2': { label: 'Querformat 3:2', ratio: 3 / 2 },
+  '4:3': { label: 'Querformat 4:3', ratio: 4 / 3 },
+  '1:1': { label: 'Quadrat 1:1', ratio: 1 },
+  '4:5': { label: 'Hochformat 4:5', ratio: 4 / 5 },
+  '2:3': { label: 'Hochformat 2:3', ratio: 2 / 3 },
+  '9:16': { label: 'Hochformat 9:16', ratio: 9 / 16 },
+  custom: { label: 'Eigene Größe in Pixeln' },
+};
+
+/** Resolutions as the length of the image's longer side in pixels. */
+export const OUTPUT_RESOLUTIONS = {
+  1280: 'HD (1280 px)',
+  1920: 'Full HD (1920 px)',
+  2560: '2K (2560 px)',
+  3840: '4K (3840 px)',
+};
+
+/** Output sizes of earlier versions, as proportion and resolution. */
+export const LEGACY_OUTPUT_SIZES = {
+  view: ['view', 1920],
+  hd: ['16:9', 1920],
+  square: ['1:1', 1920],
+  uhd: ['16:9', 3840],
+  portrait: ['4:5', 1920],
+  custom: ['custom', 1920],
 };
 
 export const RENDER_DEVICES = {

@@ -24,17 +24,24 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 11:** Warteschlange, alle Ansichten in einem Rutsch, JPG und
   Drehteller als Video oder Bildserie
 - [x] **Schritt 12:** Projekte als Datei exportieren und importieren
+- [x] **Schritt 13:** Projektübersicht, aufgeräumte Menüs mit einklappbaren
+  Gruppen, Seitenverhältnis und Auflösung getrennt, Kanten am Würfel
 
 ## Ablauf
 
+„Projekte“ oben links öffnet die Projektübersicht: alle Projekte als Kacheln
+mit Vorschaubild, letzter Änderung und Inhalt, zum Öffnen, Anlegen,
+Importieren, Duplizieren, Exportieren und Löschen. Mit mehreren Projekten
+startet die App dort.
+
 Die schwebende Seitenleiste führt als Baum durch alle Schritte. Jeder Eintrag
 hat sinnvolle Standardwerte, sodass man direkt rendern kann. Ein Klick öffnet
-die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
+die Einstellungen daneben, das Plus legt einen neuen Untereintrag an. Seltener
+gebrauchte Einstellungen stehen in einklappbaren Gruppen.
 
 1. **Projekt:** Ein Projekt ist ein Rendering-Auftrag mit Namen. Es merkt sich
    Modell, Materialien, Szene, Licht, Kamera, Ansichten und Output und öffnet
-   sich beim nächsten Start wieder vollständig. Projekte lassen sich wechseln,
-   duplizieren und löschen. „Exportieren“ speichert ein Projekt samt
+   sich beim nächsten Start wieder vollständig. „Exportieren“ speichert ein Projekt samt
    STEP-Modell und eigener HDRI als eine `.clearcoat`-Datei, „Importieren“
    (oder die Datei ins Fenster ziehen) holt es auf einem anderen Rechner
    wieder herein. Kommt ein Projekt zurück, das es dort schon gibt, fragt die
@@ -73,20 +80,22 @@ die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
    ausschalten. Das Plus legt weitere an, auch über einer HDRI-Datei.
    „Glanzlicht setzen“ richtet eine Softbox so aus, dass ihr Glanzlicht genau
    auf dem angeklickten Punkt des Modells liegt.
-7. **Perspektive:** Brennweite oder Parallelprojektion, Kamera in Zahlen
+7. **Perspektive:** Brennweite oder Parallelprojektion, „Kamera in Zahlen“
    (Drehung, Höhe, Rollen, Abstand, Drehpunkt) und Tiefenunschärfe mit Blende
    und wählbarem Fokuspunkt. Bei Baugruppen zieht die Explosionsansicht die
    Bauteile auseinander, von der Mitte aus oder entlang einer Achse; Schnitte
    wandern mit den Bauteilen mit. Das Plus speichert die aktuelle Ansicht
    samt Explosionsabstand.
-8. **Output:** Bildgröße, Qualität, transparenter Hintergrund, Entrauschen und
-   das Rendergerät (Grafikkarte oder CPU). Ein Rahmen in der Ansicht zeigt
-   genau den Bildausschnitt, der gerendert wird. Der schonende Modus hilft auf
-   Laptops und schwächeren Grafikkarten. Gespeichert wird als PNG oder JPG.
+8. **Output:** Seitenverhältnis und Auflösung (längere Bildseite) getrennt
+   oder eine eigene Größe in Pixeln, Samples und Entrauschen, Dateiformat (PNG
+   oder JPG) und transparenter Hintergrund, unter „Rechner“ das Rendergerät
+   (Grafikkarte oder CPU) und der schonende Modus für Laptops. Solange dieser
+   Schritt offen ist, zeigt ein Rahmen in der Ansicht genau den Bildausschnitt.
+9. **Renderings:** „Rendering starten“ oder das Plus startet ein Rendering,
    „Alle Ansichten rendern“ stellt jede gespeicherte Ansicht in die
    Warteschlange, „Drehteller rendern“ dreht das Modell einmal um die
    senkrechte Achse (24 bis 120 Bilder; Kamera und Licht bleiben stehen).
-9. **Renderings:** Das Plus startet ein Rendering. Läuft schon eines, wartet
+   Läuft schon eines, wartet
    das neue in der Warteschlange; Kamera und Output-Einstellungen gelten so,
    wie sie beim Einreihen waren, Material und Licht so, wie sie beim Start
    sind. Fertige Bilder bleiben als Einträge stehen und lassen sich einzeln
@@ -132,7 +141,7 @@ Testmodell liegt unter `samples/Bracket.step`.
 | Drehen | Linke Maustaste ziehen |
 | Verschieben | Rechte Maustaste ziehen |
 | Zoomen | Mausrad |
-| Standardansichten | Flächen und Ecken des Würfels unten rechts anklicken |
+| Standardansichten | Flächen, Kanten und Ecken des Würfels unten rechts anklicken |
 | In 15°-Schritten drehen | Pfeile am Würfel |
 | In 15°-Schritten rollen | Runde Pfeile am Würfel |
 | Zurück zur Standardansicht | Haus am Würfel |
@@ -162,7 +171,7 @@ Testmodell liegt unter `samples/Bracket.step`.
   Das Entrauschen übernimmt Open Image Denoise, das Modell dazu liegt unter
   `public/oidn/`.
 - `src/persistence.js` speichert Projekte und Vorlagen im Browser,
-  `src/project-file.js` packt ein Projekt in eine `.clearcoat`-Datei und liest
+  `src/overview.js` zeigt die Projektübersicht, `src/project-file.js` packt ein Projekt in eine `.clearcoat`-Datei und liest
   sie wieder.
 - `src/state.js` hält alle Einstellungen, `src/tree.js` zeichnet den Baum,
   `src/panels.js` die Einstellungen zum gewählten Eintrag, `src/main.js`

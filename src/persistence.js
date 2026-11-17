@@ -8,7 +8,9 @@ import {
   defaultOutput,
   defaultSectionCap,
   QUALITY,
-  OUTPUT_SIZES,
+  OUTPUT_ASPECTS,
+  OUTPUT_RESOLUTIONS,
+  LEGACY_OUTPUT_SIZES,
   RENDER_DEVICES,
   TURNTABLE_FRAMES,
   FLOORS,
@@ -92,6 +94,7 @@ export const fileKeys = {
   step: (projectId) => `step:${projectId}`,
   hdri: (projectId) => `hdri:${projectId}`,
   templateHdri: (templateId) => `hdri:template:${templateId}`,
+  thumbnail: (projectId) => `thumb:${projectId}`,
 };
 
 /** Stored files. Failures are not fatal: the project then simply opens without its file. */
@@ -173,11 +176,29 @@ function modelSnapshot() {
 }
 
 function blankRecord(name) {
-  return { id: uid(), name, fileName: null, partCount: 0, materials: [], views: [], hidden: [], view: null };
+  return {
+    id: uid(),
+    name,
+    modifiedAt: Date.now(),
+    fileName: null,
+    partCount: 0,
+    materials: [],
+    views: [],
+    hidden: [],
+    view: null,
+  };
 }
 
 function syncSummaries() {
-  state.projects = index.projects.map(({ id, name, fileName }) => ({ id, name, fileName }));
+  state.projects = index.projects.map((project) => ({
+    id: project.id,
+    name: project.name,
+    fileName: project.fileName,
+    modifiedAt: project.modifiedAt || 0,
+    partCount: project.fileName ? project.partCount || 0 : 0,
+    materialCount: project.fileName ? (project.materials || []).length : 0,
+    viewCount: project.fileName ? (project.views || []).length : 0,
+  }));
   state.templates = templates.map(({ id, name }) => ({ id, name }));
 }
 
@@ -210,7 +231,12 @@ export function applySettings(record) {
   );
   state.camera = mergeTyped(defaultCamera(), record.camera);
   state.output = mergeTyped(defaultOutput(), record.output);
-  if (!OUTPUT_SIZES[state.output.size]) state.output.size = 'view';
+  // Earlier versions had one choice for proportions and size together.
+  const legacy = record.output && record.output.aspect === undefined ? LEGACY_OUTPUT_SIZES[record.output.size] : null;
+  if (legacy) [state.output.aspect, state.output.resolution] = legacy;
+  delete state.output.size;
+  if (!OUTPUT_ASPECTS[state.output.aspect]) state.output.aspect = 'view';
+  if (!OUTPUT_RESOLUTIONS[state.output.resolution]) state.output.resolution = 1920;
   if (!QUALITY[state.output.quality]) state.output.quality = 'standard';
   if (!RENDER_DEVICES[state.output.device]) state.output.device = 'gpu';
   if (!FILE_FORMATS[state.output.format]) state.output.format = 'png';
@@ -308,10 +334,15 @@ export function saveNow() {
   if (suspended || !index) return;
   const record = currentRecord();
   if (!record) return;
-  record.name = state.project.name.trim() || 'Projekt';
-  Object.assign(record, settingsSnapshot());
+  const changes = { name: state.project.name.trim() || 'Projekt', ...settingsSnapshot() };
   // Without a model the last saved model data stays, so a failed load loses nothing.
-  if (state.parts.length > 0) Object.assign(record, modelSnapshot());
+  if (state.parts.length > 0) Object.assign(changes, modelSnapshot());
+  // Only real changes count for "last modified"; moving the camera does not.
+  const { view, ...compared } = changes;
+  if (Object.entries(compared).some(([key, value]) => JSON.stringify(value) !== JSON.stringify(record[key]))) {
+    record.modifiedAt = Date.now();
+  }
+  Object.assign(record, changes);
   write(PROJECTS_KEY, index);
   syncSummaries();
 }
@@ -385,6 +416,8 @@ export async function duplicateProject(id) {
   );
   await files.copy(fileKeys.step(source.id), fileKeys.step(record.id));
   await files.copy(fileKeys.hdri(source.id), fileKeys.hdri(record.id));
+  await files.copy(fileKeys.thumbnail(source.id), fileKeys.thumbnail(record.id));
+  record.modifiedAt = Date.now();
   index.projects.push(record);
   write(PROJECTS_KEY, index);
   syncSummaries();
@@ -396,6 +429,7 @@ export function deleteProject(id) {
   index.projects = index.projects.filter((project) => project.id !== id);
   files.delete(fileKeys.step(id));
   files.delete(fileKeys.hdri(id));
+  files.delete(fileKeys.thumbnail(id));
   if (index.projects.length === 0) index.projects.push(blankRecord('Projekt 1'));
   if (!currentRecord()) index.currentId = index.projects[0].id;
   write(PROJECTS_KEY, index);

@@ -266,6 +266,43 @@ export class Viewer {
   }
 
   /** The part of the viewport that is not covered by floating UI. */
+  /**
+   * A small picture of the current view for the project overview, cut from
+   * the part of the viewport that the floating panels leave free.
+   */
+  captureThumbnail(width = 480, height = 300) {
+    if (this.parts.length === 0) return null;
+    // The drawing buffer is only readable right after rendering.
+    this.renderer.render(this.scene, this.camera);
+    const region = this.getFreeRegion();
+    const ratio = this.renderer.getPixelRatio();
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    // A gradient background is drawn behind the canvas, so use its upper colour.
+    context.fillStyle = this.lighting.background === 'gradient' ? this.lighting.gradient?.from || '#eceef2' : '#eceef2';
+    context.fillRect(0, 0, width, height);
+    const sourceWidth = region.width * ratio;
+    const sourceHeight = region.height * ratio;
+    // Fill the picture, cutting off what sticks out at the sides.
+    const scale = Math.max(width / sourceWidth, height / sourceHeight);
+    const cutWidth = width / scale;
+    const cutHeight = height / scale;
+    context.drawImage(
+      this.canvas,
+      region.x * ratio + (sourceWidth - cutWidth) / 2,
+      region.y * ratio + (sourceHeight - cutHeight) / 2,
+      cutWidth,
+      cutHeight,
+      0,
+      0,
+      width,
+      height,
+    );
+    return canvas;
+  }
+
   getFreeRegion() {
     const width = this.canvas.clientWidth;
     const height = this.canvas.clientHeight;
@@ -907,6 +944,10 @@ export class Viewer {
     this.camera.near = Math.max((distance - radius * 2) / 10, radius / 1000);
     this.camera.far = distance + radius * 80;
     this.camera.updateProjectionMatrix();
+    // Zooming out stops where the model is a small speck, at any focal length.
+    const fit = radius / Math.sin(THREE.MathUtils.degToRad(this.camera.fov) / 2);
+    this.controls.maxDistance = fit * 12;
+    this.controls.minDistance = radius * 0.01;
   }
 
   /**
@@ -995,6 +1036,8 @@ export class Viewer {
     }
     if (this._viewChanged) {
       this._viewChanged = false;
+      // Zooming with the mouse moves the camera too; keep the model between the clip planes.
+      this._updateClipPlanes();
       this._placeCove();
       this.onViewChange?.();
     }

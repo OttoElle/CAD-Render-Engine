@@ -42,6 +42,7 @@ import {
 } from './export.js';
 import { PROJECT_EXTENSION, packProject, unpackProject } from './project-file.js';
 import { renderTree, setCollapsed } from './tree.js';
+import { renderOverview } from './overview.js';
 import { renderPanel, identicalParts } from './panels.js';
 import { h } from './dom.js';
 import { icon } from './icons.js';
@@ -58,7 +59,7 @@ import {
   materialEntryOf,
   setPartsAssigned,
   QUALITY,
-  OUTPUT_SIZES,
+  OUTPUT_ASPECTS,
 } from './state.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -82,6 +83,8 @@ const focusMarkerEl = $('#focus-marker');
 const renderViewEl = $('#render-view');
 const edgesBtn = $('#edges-btn');
 const projectChip = $('#project-chip');
+const projectsBtn = $('#projects-btn');
+const overviewEl = $('#overview');
 
 let loading = false;
 let statusTimer = null;
@@ -200,29 +203,26 @@ function addSection() {
 /** Pixel size of the final image for the current output settings. */
 function resolveOutputSize() {
   const { output } = state;
-  if (output.size === 'custom') return { width: output.width, height: output.height };
-  const preset = OUTPUT_SIZES[output.size];
-  if (preset?.width) return { width: preset.width, height: preset.height };
-
-  // "Wie Ansicht": the free part of the viewport at screen resolution, capped to a sane size.
-  const region = viewer.getFreeRegion();
-  const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  let width = region.width * ratio;
-  let height = region.height * ratio;
-  const scale = Math.min(1, 4096 / Math.max(width, height));
-  width = Math.max(Math.round((width * scale) / 2) * 2, 64);
-  height = Math.max(Math.round((height * scale) / 2) * 2, 64);
-  return { width, height };
+  if (output.aspect === 'custom') return { width: output.width, height: output.height };
+  let ratio = OUTPUT_ASPECTS[output.aspect]?.ratio;
+  if (!ratio) {
+    // "Wie Ansicht": the proportions of the free part of the viewport.
+    const region = viewer.getFreeRegion();
+    ratio = Math.max(region.width, 1) / Math.max(region.height, 1);
+  }
+  const long = output.resolution;
+  const even = (value) => Math.max(Math.round(value / 2) * 2, 64);
+  return ratio >= 1 ? { width: even(long), height: even(long / ratio) } : { width: even(long * ratio), height: even(long) };
 }
 
 /** Shows the crop of the final image when its aspect ratio differs from the viewport. */
 function updateOutputFrame() {
-  const cropped = state.output.size !== 'view';
+  const cropped = state.output.aspect !== 'view';
   const { width, height } = resolveOutputSize();
   viewer.outputAspect = cropped ? width / height : null;
   viewer.outputMargin = cropped ? 14 : 0;
-  // A rendering shown over the viewport covers the view the frame belongs to.
-  const show = cropped && state.parts.length > 0 && !state.selected.startsWith('render:');
+  // The frame only shows while the output is being set up, so it does not get in the way otherwise.
+  const show = cropped && state.parts.length > 0 && state.selected === 'output';
   outputFrameEl.hidden = !show;
   const frame = viewer.getOutputFrame(width / height);
   viewer.setBackdropFrame(frame);
@@ -765,6 +765,7 @@ async function openProject(record) {
 
 async function switchProject(id) {
   saveNow();
+  await saveThumbnail();
   const record = setCurrentProject(id);
   if (record) await openProject(record);
 }
@@ -793,17 +794,76 @@ async function applyTemplate(id) {
 /** A project file waiting for the decision whether it replaces the project of the same name. */
 let pendingImport = null;
 
-/** Saves the current project with its model and HDRI as one file. */
-function exportProject() {
+/** Saves a project with its model and HDRI as one file. */
+function exportProject(id = state.project.id) {
   saveNow();
-  const record = getProject(state.project.id);
+  const record = getProject(id);
   if (!record) return;
   return exporting('Projekt wird exportiert …', async () => {
     const step = record.fileName ? await files.get(fileKeys.step(record.id)) : null;
-    const hdri = state.lighting.presetId === 'custom' ? await files.get(fileKeys.hdri(record.id)) : null;
+    const hdri = record.lighting?.presetId === 'custom' ? await files.get(fileKeys.hdri(record.id)) : null;
     const blob = await packProject(record, { step, hdri });
-    downloadBlob(blob, `${fileBase()}.${PROJECT_EXTENSION}`);
+    downloadBlob(blob, `${safeFileName(record.name) || 'Projekt'}.${PROJECT_EXTENSION}`);
   });
+}
+
+// --- Project overview -----------------------------------------------------------
+
+let overviewOpen = false;
+/** Preview images of the projects as object URLs, by project id. */
+const thumbnails = new Map();
+
+/** Stores a small picture of the current view as the project's preview. */
+async function saveThumbnail() {
+  if (state.parts.length === 0 || !state.project.id) return;
+  const id = state.project.id;
+  const canvas = viewer.captureThumbnail();
+  if (!canvas) return;
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+  if (!blob) return;
+  await files.put(fileKeys.thumbnail(id), blob);
+  const old = thumbnails.get(id);
+  if (old) URL.revokeObjectURL(old);
+  thumbnails.set(id, URL.createObjectURL(blob));
+}
+
+let thumbnailTimer = null;
+
+/** Renews the preview a few seconds after the last change. */
+function scheduleThumbnail() {
+  clearTimeout(thumbnailTimer);
+  thumbnailTimer = setTimeout(() => !overviewOpen && saveThumbnail(), 3000);
+}
+
+/** Loads the preview images that are not in memory yet, then shows them. */
+async function loadThumbnails() {
+  let changed = false;
+  for (const project of state.projects) {
+    if (thumbnails.has(project.id)) continue;
+    const file = await files.get(fileKeys.thumbnail(project.id));
+    thumbnails.set(project.id, file ? URL.createObjectURL(file) : null);
+    changed = changed || Boolean(file);
+  }
+  if (changed && overviewOpen) renderOverview(overviewEl, actions);
+}
+
+function showOverview(open) {
+  if (open && !overviewOpen) {
+    saveNow();
+    saveThumbnail().then(() => overviewOpen && renderOverview(overviewEl, actions));
+  }
+  overviewOpen = open;
+  overviewEl.hidden = !open;
+  document.body.classList.toggle('overview-open', open);
+  if (open) {
+    renderOverview(overviewEl, actions);
+    loadThumbnails();
+  }
+}
+
+async function openFromOverview(id) {
+  showOverview(false);
+  if (id !== state.project.id) await switchProject(id);
 }
 
 async function importProjectFile(file) {
@@ -821,7 +881,7 @@ async function importProjectFile(file) {
   if (getProject(data.record.id)) {
     // The same project already exists here, probably from an earlier exchange: ask first.
     pendingImport = data;
-    select('project');
+    showOverview(true);
     emit('project');
     return;
   }
@@ -830,6 +890,7 @@ async function importProjectFile(file) {
 
 async function finishImport(data, replace) {
   pendingImport = null;
+  showOverview(false);
   // Replacing the open project: its pending changes must not be written over the imported one.
   if (replace && data.record.id === state.project.id) suspendSaving(true);
   else saveNow();
@@ -850,22 +911,36 @@ const actions = {
   openFile: () => fileInput.click(),
   newProject: async () => {
     saveNow();
+    await saveThumbnail();
+    showOverview(false);
     const record = createProject();
     setCurrentProject(record.id);
     await openProject(record);
   },
   switchProject,
-  duplicateProject: async () => {
+  openOverview: () => showOverview(true),
+  openFromOverview,
+  thumbnailUrl: (id) => thumbnails.get(id) || null,
+  /** Copies a project; the copy shows up in the overview, the open project stays open. */
+  duplicateProject: async (id = state.project.id) => {
     saveNow();
-    const record = await duplicateProject(state.project.id);
+    const record = await duplicateProject(id);
     if (!record) return;
-    setCurrentProject(record.id);
-    await openProject(record);
+    emit('project');
+    loadThumbnails();
   },
-  deleteProject: async () => {
+  deleteProject: async (id = state.project.id) => {
+    if (id !== state.project.id) {
+      deleteProject(id);
+      const url = thumbnails.get(id);
+      if (url) URL.revokeObjectURL(url);
+      thumbnails.delete(id);
+      emit('project');
+      return;
+    }
     // Nothing of the deleted project may be written back by a pending save.
     suspendSaving(true);
-    await openProject(deleteProject(state.project.id));
+    await openProject(deleteProject(id));
   },
   saveTemplate: async (name) => {
     await saveTemplate(name);
@@ -994,6 +1069,8 @@ function refresh(what) {
 
   scheduleSave();
   projectChip.textContent = state.project.name || 'Projekt';
+  if (overviewOpen && !live) renderOverview(overviewEl, actions);
+  if (!live && what !== 'selection' && !what.startsWith('render')) scheduleThumbnail();
   renderTree(treeEl, actions);
   if (live) panelLive?.();
   else panelLive = renderPanel(panelEl, { viewer, actions });
@@ -1062,7 +1139,11 @@ viewer.onPartClick = (partId, point, normal) => {
 // --- Opening files ------------------------------------------------------------
 
 async function openFile(file) {
-  if (!file || loading) return;
+  if (!file) return;
+  if (loading) {
+    setStatus('Es wird noch ein Modell geladen. Bitte kurz warten und dann erneut öffnen.', { error: true, timeout: 4000 });
+    return;
+  }
   if (!/\.(step|stp)$/i.test(file.name)) {
     setStatus('Bitte eine STEP-Datei wählen (.step oder .stp).', { error: true });
     return;
@@ -1131,7 +1212,11 @@ window.addEventListener('drop', (event) => {
 // --- Viewport tools -----------------------------------------------------------
 
 $('#fit-btn').addEventListener('click', () => viewer.fit());
-projectChip.addEventListener('click', () => select('project'));
+projectChip.addEventListener('click', () => {
+  showOverview(false);
+  select('project');
+});
+projectsBtn.addEventListener('click', () => showOverview(!overviewOpen));
 
 function toggleEdges() {
   const visible = !viewer.edgesVisible;
@@ -1143,6 +1228,10 @@ edgesBtn.addEventListener('click', toggleEdges);
 window.addEventListener('keydown', (event) => {
   const tag = event.target.tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || event.metaKey || event.ctrlKey) return;
+  if (overviewOpen) {
+    if (event.key === 'Escape') showOverview(false);
+    return;
+  }
   if (event.key === 'f' || event.key === 'F') viewer.fit();
   if (event.key === 'e' || event.key === 'E') toggleEdges();
   if (event.key === 'Escape') {
@@ -1156,6 +1245,8 @@ window.addEventListener('keydown', (event) => {
 new ResizeObserver(() => updateInset()).observe(stageEl);
 updateInset(true);
 openProject(initProjects());
+// With several projects the app starts on the overview, like a list of recent documents.
+if (state.projects.length > 1) showOverview(true);
 
 // Exposed for automated tests and debugging in the browser console.
 window.__cad = { viewer, state, actions, select, emit, getMaterialDef };

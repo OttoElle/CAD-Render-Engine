@@ -73,6 +73,196 @@ body {
   white-space: nowrap;
 }
 
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#projects-btn {
+  height: 30px;
+  padding: 0 10px;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+#projects-btn:hover {
+  color: var(--text);
+}
+
+.overview-open #projects-btn {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.overview-open .breadcrumb-separator,
+.overview-open #project-chip {
+  display: none;
+}
+
+.breadcrumb-separator {
+  color: var(--muted);
+}
+
+/* --- Project overview ---------------------------------------------------- */
+
+#overview {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
+  background: var(--page);
+}
+
+.overview-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 28px 32px 40px;
+}
+
+.overview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.overview-header h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.overview-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.overview-buttons button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 16px;
+}
+
+.project-tile {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  cursor: pointer;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+.project-tile:hover,
+.project-tile:focus-visible {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  outline: none;
+}
+
+.project-tile.current {
+  border-color: var(--accent);
+}
+
+.tile-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 10;
+  background: #eceef2;
+  border-bottom: 1px solid var(--border);
+}
+
+.tile-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.tile-placeholder {
+  color: var(--border-strong);
+}
+
+.tile-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+
+.tile-text strong {
+  font-size: 14.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-text span {
+  color: var(--muted);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding: 4px 8px 4px 14px;
+  border-top: 1px solid var(--border);
+  min-height: 38px;
+}
+
+.tile-facts {
+  display: flex;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.tile-facts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tile-actions {
+  display: flex;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.project-tile:hover .tile-actions,
+.project-tile:focus-within .tile-actions {
+  opacity: 1;
+}
+
+.icon-button.danger-hover:hover,
+.icon-button.armed {
+  color: var(--danger);
+}
+
+.icon-button.armed {
+  background: #fdecea;
+}
+
 /* --- Stage ----------------------------------------------------------------- */
 
 #stage {
@@ -156,7 +346,7 @@ body {
 
 #status {
   position: absolute;
-  z-index: 5;
+  z-index: 30;
   bottom: 16px;
   left: calc(var(--inset) + (100% - var(--inset)) / 2);
   transform: translateX(-50%);
@@ -622,6 +812,84 @@ button.node-toggle:hover {
   margin: 0;
 }
 
+/* Foldable groups of settings. */
+.group {
+  margin: 0 -14px;
+  padding: 0 14px;
+  border-top: 1px solid var(--border);
+}
+
+.group > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.group > summary::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+
+.group[open] > summary::after {
+  transform: rotate(45deg);
+}
+
+.group > summary:hover {
+  color: var(--text);
+}
+
+.group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 14px;
+}
+
+/* A group at the top of a panel needs no line above it. */
+.panel-body > .group:first-child {
+  margin-top: -10px;
+  border-top: 0;
+}
+
+/* Groups follow each other without the panel's gap, so their lines form a list. */
+.group + .group {
+  margin-top: -12px;
+}
+
+.slider-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text);
+}
+
+.slider-value {
+  width: 76px;
+  height: 22px;
+  padding: 0 4px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .hint {
   color: var(--muted);
   font-size: 12.5px;
@@ -916,6 +1184,26 @@ button.node-toggle:hover {
 
 .viewcube-corner:hover {
   background: var(--accent);
+}
+
+.viewcube-edge {
+  position: absolute;
+  left: -19px;
+  top: -6px;
+  width: 38px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+}
+
+.viewcube-edge:hover {
+  background: rgba(37, 99, 235, 0.55);
+}
+
+.viewcube-edge.back {
+  pointer-events: none;
 }
 
 .viewcube-axes {

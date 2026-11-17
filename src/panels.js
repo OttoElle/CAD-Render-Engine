@@ -7,7 +7,8 @@ import {
   withIds,
   FLOORS,
   QUALITY,
-  OUTPUT_SIZES,
+  OUTPUT_ASPECTS,
+  OUTPUT_RESOLUTIONS,
   RENDER_DEVICES,
   TURNTABLE_FRAMES,
   addMaterial,
@@ -71,9 +72,64 @@ function toggle(label, checked, onchange, title) {
   );
 }
 
-/** A range slider with its value shown next to the label. Returns the field; `set(value)` updates it from outside. */
-function slider(label, { min, max, step = 1, value, format, oninput, onchange, disabled, title }) {
-  const output = h('output', null, format(value));
+// Which groups are folded, remembered across panels and visits.
+const GROUPS_KEY = 'clearcoat:groups';
+const groupState = (() => {
+  try {
+    return new Map(Object.entries(JSON.parse(localStorage.getItem(GROUPS_KEY)) || {}));
+  } catch {
+    return new Map();
+  }
+})();
+
+/** A titled group of settings that folds away. `open` is how it starts the first time. */
+function group(key, title, children, { open = true, title: hint } = {}) {
+  const node = h(
+    'details',
+    {
+      class: 'group',
+      open: groupState.has(key) ? groupState.get(key) : open,
+      ontoggle: () => {
+        groupState.set(key, node.open);
+        try {
+          localStorage.setItem(GROUPS_KEY, JSON.stringify(Object.fromEntries(groupState)));
+        } catch {
+          // Not remembered then; nothing else depends on it.
+        }
+      },
+    },
+    h('summary', { title: hint }, title),
+    h('div', { class: 'group-body' }, children),
+  );
+  return node;
+}
+
+/**
+ * A range slider with its value shown next to the label. Returns the field;
+ * `set(value)` updates it from outside. With `edit` ({ digits, unit }) the
+ * value is a number box that can be typed into, beyond the slider's range.
+ */
+function slider(label, { min, max, step = 1, value, format, oninput, onchange, disabled, title, edit }) {
+  let output = h('output', null, format(value));
+  if (edit) {
+    const round = (number) => String(Number(number.toFixed(edit.digits ?? 1)));
+    const box = h('input', {
+      type: 'number',
+      class: 'slider-value',
+      step,
+      value: round(value),
+      onchange: (event) => {
+        const next = Number(event.target.value);
+        if (event.target.value === '' || !Number.isFinite(next)) return;
+        input.value = next;
+        oninput(next);
+        onchange?.(next);
+      },
+    });
+    output = h('span', { class: 'slider-edit' }, box, edit.unit ? h('span', null, edit.unit) : null);
+    output.box = box;
+    output.round = round;
+  }
   const input = h('input', {
     type: 'range',
     min,
@@ -83,16 +139,21 @@ function slider(label, { min, max, step = 1, value, format, oninput, onchange, d
     disabled,
     oninput: (event) => {
       const next = Number(event.target.value);
-      output.textContent = format(next);
+      if (edit) output.box.value = output.round(next);
+      else output.textContent = format(next);
       oninput(next);
     },
     // Fires once the slider is let go, for updates too costly to run while dragging.
     onchange: onchange ? () => onchange(Number(input.value)) : null,
   });
-  const node = h('label', { class: 'field', title }, h('span', { class: 'field-label' }, label, output), input);
+  const node = h(edit ? 'div' : 'label', { class: 'field', title }, h('span', { class: 'field-label' }, label, output), input);
   node.set = (next, text) => {
     if (document.activeElement !== input) input.value = next;
-    output.textContent = text ?? format(next);
+    if (edit) {
+      if (document.activeElement !== output.box) output.box.value = output.round(next);
+    } else {
+      output.textContent = text ?? format(next);
+    }
   };
   return node;
 }
@@ -152,7 +213,6 @@ const plural = (count, one, many) => `${numberFormat.format(count)} ${count === 
 // --- Panels -------------------------------------------------------------------
 
 function projectPanel({ actions }) {
-  const currentName = h('span', { class: 'item-name' }, state.project.name);
   const templateName = h('input', {
     type: 'text',
     placeholder: 'Name der Vorlage',
@@ -181,44 +241,19 @@ function projectPanel({ actions }) {
           },
         }),
       ),
-      h('h3', null, 'Projekte'),
-      h(
-        'ul',
-        { class: 'item-list' },
-        state.projects.map((project) => {
-          const current = project.id === state.project.id;
-          return h(
-            'li',
-            {
-              class: current ? 'current' : '',
-              role: 'button',
-              tabIndex: 0,
-              title: current ? 'Geöffnet' : 'Projekt öffnen',
-              onclick: () => !current && actions.switchProject(project.id),
-            },
-            current ? currentName : h('span', { class: 'item-name' }, project.name),
-            h('span', { class: 'item-detail' }, project.fileName || 'ohne Geometrie'),
-          );
-        }),
-      ),
       h(
         'div',
         { class: 'button-row' },
-        h('button', { onclick: actions.newProject }, 'Neu'),
-        h('button', { onclick: actions.duplicateProject }, 'Duplizieren'),
-        confirmButton('Löschen', actions.deleteProject),
+        h('button', { onclick: actions.openOverview }, 'Alle Projekte'),
+        h(
+          'button',
+          {
+            onclick: () => actions.exportProject(),
+            title: 'Speichert das Projekt samt STEP-Modell und eigener HDRI als .clearcoat-Datei, z. B. für einen anderen Rechner',
+          },
+          'Exportieren',
+        ),
       ),
-      importNotice(actions),
-      h(
-        'div',
-        {
-          class: 'button-row',
-          title: 'Eine Projektdatei (.clearcoat) enthält Einstellungen, Ansichten, das STEP-Modell und eine eigene HDRI',
-        },
-        h('button', { onclick: actions.importProject }, 'Importieren'),
-        h('button', { onclick: actions.exportProject }, 'Exportieren'),
-      ),
-      h('p', { class: 'hint' }, 'Zum Weiterarbeiten an einem anderen Rechner: hier exportieren, dort importieren.'),
       h('h3', null, 'Vorlagen'),
       state.templates.length > 0
         ? h(
@@ -251,31 +286,7 @@ function projectPanel({ actions }) {
         h('button', { onclick: saveTemplate }, 'Speichern'),
       ),
     ],
-    live: () => {
-      currentName.textContent = state.project.name;
-    },
   };
-}
-
-/** Asks whether an imported project replaces the one of the same origin that is already here. */
-function importNotice(actions) {
-  const pending = actions.pendingImport();
-  if (!pending) return null;
-  const date = pending.exportedAt
-    ? ` Die Datei wurde am ${pending.exportedAt.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })} exportiert.`
-    : '';
-  return h(
-    'div',
-    { class: 'notice' },
-    h('p', null, `„${pending.name}“ ist hier schon vorhanden.${date} Ersetzen oder als Kopie importieren?`),
-    h(
-      'div',
-      { class: 'button-row' },
-      h('button', { class: 'primary', onclick: () => actions.finishImport(true) }, 'Ersetzen'),
-      h('button', { onclick: () => actions.finishImport(false) }, 'Als Kopie'),
-      h('button', { onclick: actions.cancelImport }, 'Abbrechen'),
-    ),
-  );
 }
 
 function geometryPanel({ actions }) {
@@ -399,15 +410,6 @@ function sectionPanel(section, { viewer, actions }) {
     return { min, max, step: Math.max((max - min) / 400, 1e-3) };
   };
   const { min, max, step } = range();
-  const positionBox = numberBox('Position mm', {
-    value: section.position,
-    step: Number(step.toPrecision(1)),
-    digits: 2,
-    onchange: (value) => {
-      section.position = value;
-      emit('sections');
-    },
-  });
   const set = (key) => (value) => {
     section[key] = value;
     emit('sections');
@@ -452,13 +454,13 @@ function sectionPanel(section, { viewer, actions }) {
         step,
         value: section.position,
         format: (value) => `${numberFormat.format(Math.round(value * 10) / 10)} mm`,
+        edit: { digits: 2, unit: 'mm' },
         oninput: (value) => {
           section.position = value;
-          positionBox.set(value);
           emit('sections:live');
         },
+        onchange: () => emit('sections'),
       }),
-      positionBox,
       toggle('Andere Seite zeigen', section.flip, set('flip')),
       state.parts.length > 1
         ? [
@@ -622,75 +624,79 @@ function materialPanel(entry, { actions }) {
           },
         }),
       ),
-      tuneSlider('Rauheit', 'roughness', 'Niedrig spiegelt, hoch streut das Licht'),
-      tuneSlider('Metallisch', 'metalness', 'Metalle stehen auf 100 %, Kunststoffe und Lacke auf 0 %'),
-      tuneSlider('Klarlack', 'clearcoat', 'Glänzende Schicht über dem Material'),
-      field(
-        'Oberfläche',
-        selectControl(
-          Object.entries(FINISHES).map(([key, value]) => [key, value.label]),
-          tuning.finish,
-          tune('finish', false),
+      group('material-tuning', 'Feinabstimmung', [
+        tuneSlider('Rauheit', 'roughness', 'Niedrig spiegelt, hoch streut das Licht'),
+        tuneSlider('Metallisch', 'metalness', 'Metalle stehen auf 100 %, Kunststoffe und Lacke auf 0 %'),
+        tuneSlider('Klarlack', 'clearcoat', 'Glänzende Schicht über dem Material'),
+        field(
+          'Oberfläche',
+          selectControl(
+            Object.entries(FINISHES).map(([key, value]) => [key, value.label]),
+            tuning.finish,
+            tune('finish', false),
+          ),
         ),
-      ),
-      tuning.finish !== 'none'
-        ? [
-            field(
-              tuning.finish === 'turned' ? 'Drehachse' : 'Schliffrichtung',
-              selectControl(Object.entries(FINISH_AXES), tuning.finishAxis, tune('finishAxis', false)),
-            ),
-            slider('Ausprägung', {
-              min: 0,
-              max: 100,
-              value: Math.round(tuning.finishStrength * 100),
-              format: (value) => `${value} %`,
-              title: 'Wie stark die Spiegelungen quer zu den Riefen verwischen',
-              oninput: (value) => tune('finishStrength')(value / 100),
-              onchange: () => emit('materials'),
-            }),
-          ]
-        : null,
-      modified
-        ? h(
-            'button',
-            {
-              class: 'link',
-              onclick: () => {
-                entry.colorHex = def.color;
-                entry.tuning = defaultTuning(entry.materialId);
-                emit('materials');
+        tuning.finish !== 'none'
+          ? [
+              field(
+                tuning.finish === 'turned' ? 'Drehachse' : 'Schliffrichtung',
+                selectControl(Object.entries(FINISH_AXES), tuning.finishAxis, tune('finishAxis', false)),
+              ),
+              slider('Ausprägung', {
+                min: 0,
+                max: 100,
+                value: Math.round(tuning.finishStrength * 100),
+                format: (value) => `${value} %`,
+                title: 'Wie stark die Spiegelungen quer zu den Riefen verwischen',
+                oninput: (value) => tune('finishStrength')(value / 100),
+                onchange: () => emit('materials'),
+              }),
+            ]
+          : null,
+        modified
+          ? h(
+              'button',
+              {
+                class: 'link',
+                onclick: () => {
+                  entry.colorHex = def.color;
+                  entry.tuning = defaultTuning(entry.materialId);
+                  emit('materials');
+                },
               },
-            },
-            'Auf Vorgabe zurücksetzen',
-          )
-        : null,
-      h('h3', { title: 'Hier anhaken oder direkt im Modell anklicken' }, `Bauteile (${entry.partIds.size})`),
-      h(
-        'div',
-        { class: 'button-row' },
-        h('button', { onclick: () => setPartsAssigned(entry, state.parts.map((p) => p.id), true) }, 'Alle'),
-        h('button', { onclick: () => setPartsAssigned(entry, [...entry.partIds], false) }, 'Keine'),
-      ),
-      toggle('Gleiche Bauteile gemeinsam', linkIdentical, (checked) => {
-        linkIdentical = checked;
-      }),
-      partList(
-        state.parts,
-        (part) => {
-          const owner = materialEntryOf(part.id);
-          return [
-            h('input', {
-              type: 'checkbox',
-              checked: owner === entry,
-              onchange: (event) =>
-                setPartsAssigned(entry, identicalParts(part).map((p) => p.id), event.target.checked),
-            }),
-            h('span', { class: 'part-name' }, part.label),
-            owner && owner !== entry ? h('span', { class: 'part-owner' }, materialEntryLabel(owner)) : null,
-          ];
-        },
-        actions,
-      ),
+              'Auf Vorgabe zurücksetzen',
+            )
+          : null,
+      ]),
+      group('material-parts', `Bauteile (${entry.partIds.size})`, [
+        h('p', { class: 'hint' }, 'Hier anhaken oder direkt im Modell anklicken.'),
+        h(
+          'div',
+          { class: 'button-row' },
+          h('button', { onclick: () => setPartsAssigned(entry, state.parts.map((p) => p.id), true) }, 'Alle'),
+          h('button', { onclick: () => setPartsAssigned(entry, [...entry.partIds], false) }, 'Keine'),
+        ),
+        toggle('Gleiche Bauteile gemeinsam', linkIdentical, (checked) => {
+          linkIdentical = checked;
+        }),
+        partList(
+          state.parts,
+          (part) => {
+            const owner = materialEntryOf(part.id);
+            return [
+              h('input', {
+                type: 'checkbox',
+                checked: owner === entry,
+                onchange: (event) =>
+                  setPartsAssigned(entry, identicalParts(part).map((p) => p.id), event.target.checked),
+              }),
+              h('span', { class: 'part-name' }, part.label),
+              owner && owner !== entry ? h('span', { class: 'part-owner' }, materialEntryLabel(owner)) : null,
+            ];
+          },
+          actions,
+        ),
+      ]),
       h(
         'button',
         {
@@ -894,60 +900,66 @@ function lightPanel(light, { actions }) {
         }),
       ),
       toggle('Aktiv', light.enabled, set('enabled', false)),
-      h(
-        'button',
-        {
-          class: picking ? 'active' : '',
-          onclick: () => actions.pickHighlight(light),
-          title: 'Setzt die Softbox so, dass ihr Glanzlicht auf dem angeklickten Punkt liegt',
-        },
-        picking ? 'Punkt im Modell anklicken …' : 'Glanzlicht setzen',
-      ),
-      angle('Richtung', 'az', -180, 180, '0° ist vorne, 90° rechts'),
-      angle('Höhe', 'el', -30, 90, '0° ist auf Höhe des Modells, 90° direkt darüber'),
-      slider('Breite', {
-        min: 1,
-        max: MAX_LIGHT_SIZE,
-        step: SIZE_STEPS,
-        value: light.width,
-        format: (value) => `${value}°`,
-        title: 'Größere Softboxen geben weichere Schatten bei gleicher Lichtmenge',
-        oninput: set('width'),
-      }),
-      slider('Höhe der Fläche', {
-        min: 1,
-        max: MAX_LIGHT_SIZE,
-        step: SIZE_STEPS,
-        value: light.height,
-        format: (value) => `${value}°`,
-        oninput: set('height'),
-      }),
-      field(
-        'Form',
-        selectControl(
-          [
-            ['rect', 'Rechteckig'],
-            ['round', 'Rund'],
-          ],
-          light.round ? 'round' : 'rect',
-          (value) => set('round', false)(value === 'round'),
+      group('light-position', 'Position', [
+        h(
+          'button',
+          {
+            class: picking ? 'active' : '',
+            onclick: () => actions.pickHighlight(light),
+            title: 'Setzt die Softbox so, dass ihr Glanzlicht auf dem angeklickten Punkt liegt',
+          },
+          picking ? 'Punkt im Modell anklicken …' : 'Glanzlicht setzen',
         ),
-      ),
-      slider('Leistung', {
-        min: -50,
-        max: 150,
-        value: toSlider(light.power),
-        format: (value) => numberFormat.format(fromSlider(value)),
-        oninput: (value) => set('power')(fromSlider(value)),
-      }),
-      field(
-        'Farbe',
-        h('input', {
-          type: 'color',
-          value: light.color,
-          oninput: (event) => set('color')(event.target.value),
+        angle('Richtung', 'az', -180, 180, '0° ist vorne, 90° rechts'),
+        angle('Höhe', 'el', -30, 90, '0° ist auf Höhe des Modells, 90° direkt darüber'),
+      ]),
+      group('light-size', 'Fläche', [
+        slider('Breite', {
+          min: 1,
+          max: MAX_LIGHT_SIZE,
+          step: SIZE_STEPS,
+          value: light.width,
+          format: (value) => `${value}°`,
+          title: 'Größere Softboxen geben weichere Schatten bei gleicher Lichtmenge',
+          oninput: set('width'),
         }),
-      ),
+        slider('Höhe', {
+          min: 1,
+          max: MAX_LIGHT_SIZE,
+          step: SIZE_STEPS,
+          value: light.height,
+          format: (value) => `${value}°`,
+          oninput: set('height'),
+        }),
+        field(
+          'Form',
+          selectControl(
+            [
+              ['rect', 'Rechteckig'],
+              ['round', 'Rund'],
+            ],
+            light.round ? 'round' : 'rect',
+            (value) => set('round', false)(value === 'round'),
+          ),
+        ),
+      ]),
+      group('light-power', 'Licht', [
+        slider('Leistung', {
+          min: -50,
+          max: 150,
+          value: toSlider(light.power),
+          format: (value) => numberFormat.format(fromSlider(value)),
+          oninput: (value) => set('power')(fromSlider(value)),
+        }),
+        field(
+          'Farbe',
+          h('input', {
+            type: 'color',
+            value: light.color,
+            oninput: (event) => set('color')(event.target.value),
+          }),
+        ),
+      ]),
       h(
         'button',
         {
@@ -1030,64 +1042,71 @@ function viewsPanel({ viewer, actions }) {
         viewer.setParallel(checked);
         emit('views');
       }),
-      h('h3', { title: '0° ist die Ansicht von vorne, 90° von rechts' }, 'Kamera'),
-      h('div', { class: 'field-grid two' }, boxes.azimuth, boxes.elevation, boxes.roll, boxes.distance),
-      h('h3', { title: 'Punkt im Modell, um den die Kamera dreht' }, 'Drehpunkt (mm)'),
-      h('div', { class: 'field-grid three' }, targetBoxes),
       h(
         'div',
         { class: 'button-row' },
         h('button', { onclick: () => viewer.fit() }, 'Einpassen'),
         h('button', { onclick: () => viewer.home() }, 'Standardansicht'),
       ),
-      h('h3', null, 'Tiefenunschärfe'),
-      toggle(
-        'Im Rendering anwenden',
-        camera.dof,
-        (checked) => {
-          camera.dof = checked;
-          emit('camera');
-        },
-        'Die Echtzeit-Ansicht bleibt scharf',
+      group(
+        'camera-numbers',
+        'Kamera in Zahlen',
+        [
+          h('div', { class: 'field-grid two', title: '0° ist die Ansicht von vorne, 90° von rechts' }, boxes.azimuth, boxes.elevation, boxes.roll, boxes.distance),
+          h('p', { class: 'hint', title: 'Punkt im Modell, um den die Kamera dreht' }, 'Drehpunkt (mm)'),
+          h('div', { class: 'field-grid three' }, targetBoxes),
+        ],
+        { open: false },
       ),
-      camera.dof
-        ? [
-            slider('Blende', {
-              min: 0,
-              max: F_STOPS.length - 1,
-              value: Math.max(F_STOPS.indexOf(camera.fStop), 0),
-              format: (value) => `f/${F_STOPS[value]}`,
-              title: 'Kleine Blendenzahl bedeutet stärkere Unschärfe',
-              oninput: (value) => {
-                camera.fStop = F_STOPS[value];
-                emit('camera:live');
-              },
-            }),
-            focusText,
-            h(
-              'div',
-              { class: 'button-row' },
+      group('depth-of-field', 'Tiefenunschärfe', [
+        toggle(
+          'Im Rendering anwenden',
+          camera.dof,
+          (checked) => {
+            camera.dof = checked;
+            emit('camera');
+          },
+          'Die Echtzeit-Ansicht bleibt scharf',
+        ),
+        camera.dof
+          ? [
+              slider('Blende', {
+                min: 0,
+                max: F_STOPS.length - 1,
+                value: Math.max(F_STOPS.indexOf(camera.fStop), 0),
+                format: (value) => `f/${F_STOPS[value]}`,
+                title: 'Kleine Blendenzahl bedeutet stärkere Unschärfe',
+                oninput: (value) => {
+                  camera.fStop = F_STOPS[value];
+                  emit('camera:live');
+                },
+              }),
+              focusText,
               h(
-                'button',
-                { class: picking ? 'active' : '', onclick: actions.pickFocus },
-                picking ? 'Punkt anklicken …' : 'Fokus wählen',
-              ),
-              camera.focusPoint
-                ? h(
-                    'button',
-                    {
-                      onclick: () => {
-                        camera.focusPoint = null;
-                        emit('camera');
+                'div',
+                { class: 'button-row' },
+                h(
+                  'button',
+                  { class: picking ? 'active' : '', onclick: actions.pickFocus },
+                  picking ? 'Punkt anklicken …' : 'Fokus wählen',
+                ),
+                camera.focusPoint
+                  ? h(
+                      'button',
+                      {
+                        onclick: () => {
+                          camera.focusPoint = null;
+                          emit('camera');
+                        },
                       },
-                    },
-                    'Zurücksetzen',
-                  )
-                : null,
-            ),
-          ]
-        : null,
-      ...explodeControls(),
+                      'Zurücksetzen',
+                    )
+                  : null,
+              ),
+            ]
+          : null,
+      ], { open: camera.dof }),
+      explodeControls(),
       h('button', { class: 'primary', onclick: actions.addView }, 'Ansicht speichern'),
     ],
     live: () => {
@@ -1103,35 +1122,34 @@ function viewsPanel({ viewer, actions }) {
 
 /** Exploded view: how far apart the parts move, and in which direction. */
 function explodeControls() {
-  if (state.parts.length < 2) return [];
+  if (state.parts.length < 2) return null;
   const { explode } = state;
-  return [
-    h('h3', { title: 'Zieht die Bauteile einer Baugruppe auseinander, um ihren Aufbau zu zeigen' }, 'Explosionsansicht'),
-    slider('Abstand', {
-      min: 0,
-      max: 150,
-      step: 1,
-      value: Math.round(explode.amount * 100),
-      format: (value) => (value === 0 ? 'zusammengebaut' : `${value} %`),
-      title: 'Wie weit die Bauteile auseinanderrücken: 100 % verdoppelt ihren Abstand zur Mitte der Baugruppe',
-      oninput: (value) => {
-        explode.amount = value / 100;
-        emit('explode:live');
-      },
-      onchange: () => emit('explode'),
-    }),
-    field(
-      'Richtung',
-      selectControl(
-        Object.entries(EXPLODE_DIRECTIONS),
-        explode.direction,
-        (value) => {
-          explode.direction = value;
-          emit('explode');
+  return group('explode', 'Explosionsansicht', [
+      slider('Abstand', {
+        min: 0,
+        max: 150,
+        step: 1,
+        value: Math.round(explode.amount * 100),
+        format: (value) => (value === 0 ? 'zusammengebaut' : `${value} %`),
+        title: 'Wie weit die Bauteile auseinanderrücken: 100 % verdoppelt ihren Abstand zur Mitte der Baugruppe',
+        oninput: (value) => {
+          explode.amount = value / 100;
+          emit('explode:live');
         },
+        onchange: () => emit('explode'),
+      }),
+      field(
+        'Richtung',
+        selectControl(
+          Object.entries(EXPLODE_DIRECTIONS),
+          explode.direction,
+          (value) => {
+            explode.direction = value;
+            emit('explode');
+          },
+        ),
       ),
-    ),
-  ];
+  ], { open: explode.amount > 0, title: 'Zieht die Bauteile einer Baugruppe auseinander, um ihren Aufbau zu zeigen' });
 }
 
 function viewPanel(view, { viewer, actions }) {
@@ -1198,128 +1216,148 @@ function outputPanel({ actions }) {
   return {
     title: 'Output',
     body: [
-      field(
-        'Bildgröße',
-        selectControl(
-          Object.entries(OUTPUT_SIZES).map(([key, value]) => [key, value.label]),
-          output.size,
-          set('size'),
+      group('output-image', 'Bild', [
+        field(
+          'Seitenverhältnis',
+          selectControl(
+            Object.entries(OUTPUT_ASPECTS).map(([key, value]) => [key, value.label]),
+            output.aspect,
+            set('aspect'),
+          ),
         ),
-        output.size === 'custom' ? null : `${size.width} × ${size.height}`,
-      ),
-      output.size === 'custom'
-        ? h('div', { class: 'field-grid two' }, field('Breite px', sizeInput('width')), field('Höhe px', sizeInput('height')))
-        : null,
-      h(
-        'button',
-        { onclick: () => actions.fit(), title: 'Der Rahmen in der Ansicht zeigt den Bildausschnitt' },
-        'Modell in den Ausschnitt einpassen',
-      ),
-      field(
-        'Qualität',
-        selectControl(
-          Object.entries(QUALITY).map(([key, value]) => [key, `${value.label} (${value.samples} Samples)`]),
-          output.quality,
-          set('quality'),
+        output.aspect === 'custom'
+          ? h('div', { class: 'field-grid two' }, field('Breite px', sizeInput('width')), field('Höhe px', sizeInput('height')))
+          : field(
+              'Auflösung',
+              selectControl(
+                Object.entries(OUTPUT_RESOLUTIONS).map(([key, label]) => [key, label]),
+                String(output.resolution),
+                (value) => set('resolution')(Number(value)),
+              ),
+              `${size.width} × ${size.height}`,
+            ),
+        h(
+          'button',
+          { onclick: () => actions.fit(), title: 'Der gestrichelte Rahmen in der Ansicht zeigt den Bildausschnitt' },
+          'Modell in den Ausschnitt einpassen',
         ),
-      ),
-      toggle('Transparenter Hintergrund', output.transparent, set('transparent'), 'PNG ohne Hintergrund und Boden'),
-      field(
-        'Dateiformat',
-        selectControl(
-          Object.entries(FILE_FORMATS).map(([key, value]) => [key, value.label]),
-          output.format,
-          set('format'),
+      ]),
+      group('output-quality', 'Qualität', [
+        field(
+          'Samples',
+          selectControl(
+            Object.entries(QUALITY).map(([key, value]) => [key, `${value.label} (${value.samples})`]),
+            output.quality,
+            set('quality'),
+          ),
         ),
-      ),
-      output.transparent && output.format === 'jpg'
-        ? h('p', { class: 'hint' }, 'JPG kennt keine Transparenz: Bilder werden beim Speichern auf Weiß gesetzt.')
-        : null,
-      toggle('Entrauschen', output.denoise, set('denoise'), 'Glättet das Restrauschen am Ende des Renderings'),
-      field(
-        'Rendern auf',
-        selectControl(
-          Object.entries(RENDER_DEVICES).map(([key, value]) => [key, value.label]),
-          output.device,
-          set('device'),
+        toggle('Entrauschen', output.denoise, set('denoise'), 'Glättet das Restrauschen am Ende des Renderings'),
+      ]),
+      group('output-file', 'Datei', [
+        field(
+          'Dateiformat',
+          selectControl(
+            Object.entries(FILE_FORMATS).map(([key, value]) => [key, value.label]),
+            output.format,
+            set('format'),
+          ),
         ),
+        toggle('Transparenter Hintergrund', output.transparent, set('transparent'), 'Ohne Hintergrund und Boden, nur mit PNG'),
+        output.transparent && output.format === 'jpg'
+          ? h('p', { class: 'hint' }, 'JPG kennt keine Transparenz: Bilder werden beim Speichern auf Weiß gesetzt.')
+          : null,
+      ]),
+      group(
+        'output-device',
+        'Rechner',
+        [
+          field(
+            'Rendern auf',
+            selectControl(
+              Object.entries(RENDER_DEVICES).map(([key, value]) => [key, value.label]),
+              output.device,
+              set('device'),
+            ),
+          ),
+          output.device === 'gpu'
+            ? toggle(
+                'Schonender Modus',
+                output.gentle,
+                set('gentle'),
+                'Für Laptops und schwächere Grafikkarten: kleinere Portionen, dafür langsamer',
+              )
+            : h('p', { class: 'hint' }, 'Ohne Grafikkarte dauert ein Bild ein Vielfaches. Als Notlösung gedacht.'),
+        ],
+        { open: false },
       ),
-      output.device === 'gpu'
-        ? toggle(
-            'Schonender Modus',
-            output.gentle,
-            set('gentle'),
-            'Für Laptops und schwächere Grafikkarten: kleinere Portionen, dafür langsamer',
-          )
-        : h('p', { class: 'hint' }, 'Ohne Grafikkarte dauert ein Bild ein Vielfaches. Als Notlösung gedacht.'),
-      ...renderButtons(actions),
+      actions.renderSupported
+        ? h('button', { class: 'primary', onclick: actions.startRender }, 'Rendering starten')
+        : h('p', { class: 'hint error' }, 'Dieser Browser unterstützt kein WebGPU. Bitte Chrome oder Edge verwenden.'),
     ],
   };
 }
 
-/** Buttons that start renderings: the current view, all saved views, or a turntable series. */
-function renderButtons(actions) {
+function rendersPanel({ actions }) {
   if (!actions.renderSupported) {
-    return [h('p', { class: 'hint error' }, 'Dieser Browser unterstützt kein WebGPU. Bitte Chrome oder Edge verwenden.')];
+    return {
+      title: 'Renderings',
+      body: [h('p', { class: 'hint error' }, 'Dieser Browser unterstützt kein WebGPU. Bitte Chrome oder Edge verwenden.')],
+    };
   }
   const { output } = state;
   const views = state.views.length;
-  return [
-    h('button', { class: 'primary', onclick: actions.startRender }, 'Rendering starten'),
-    h('h3', null, 'Mehrere Bilder'),
-    h(
-      'button',
-      {
-        onclick: actions.renderAllViews,
-        disabled: views === 0,
-        title: views === 0 ? 'Unter „Perspektive“ lassen sich Ansichten speichern' : 'Rendert jede gespeicherte Ansicht nacheinander',
-      },
-      views === 0 ? 'Alle Ansichten rendern (noch keine gespeichert)' : `Alle ${views} Ansichten rendern`,
-    ),
-    field(
-      'Drehteller',
-      selectControl(
-        TURNTABLE_FRAMES.map((frames) => [frames, `${frames} Bilder (alle ${numberFormat.format(360 / frames)}°)`]),
-        output.turntableFrames,
-        (value) => {
-          output.turntableFrames = Number(value);
-          emit('output');
-        },
-      ),
-    ),
-    h(
-      'button',
-      {
-        onclick: actions.renderTurntable,
-        title: 'Das Modell dreht sich einmal um die senkrechte Achse; Kamera und Licht bleiben stehen',
-      },
-      'Drehteller rendern',
-    ),
-    h(
-      'p',
-      { class: 'hint' },
-      `Ein Drehteller wird als Video (eine Umdrehung in ${TURN_SECONDS} Sekunden) oder als Einzelbilder gespeichert. ` +
-        'Je mehr Bilder, desto flüssiger das Video und desto länger das Rendern.',
-    ),
-  ];
-}
-
-function rendersPanel({ actions }) {
   const done = state.renders.filter((render) => render.status === 'done').length;
   const queued = state.renders.filter((render) => render.status === 'queued').length;
-  const format = FILE_FORMATS[state.output.format].extension.toUpperCase();
+  const format = FILE_FORMATS[output.format].extension.toUpperCase();
   return {
     title: 'Renderings',
     body: [
-      done > 0
-        ? h(
-            'button',
-            { onclick: actions.saveAllRenders, title: 'Alle fertigen Bilder in einer ZIP-Datei, im Format aus „Output“' },
-            `Alle fertigen Bilder speichern (${format}, ZIP)`,
-          )
-        : null,
+      h('button', { class: 'primary', onclick: actions.startRender }, 'Rendering starten'),
+      h(
+        'button',
+        {
+          onclick: actions.renderAllViews,
+          disabled: views === 0,
+          title: views === 0 ? 'Unter „Perspektive“ lassen sich Ansichten speichern' : 'Rendert jede gespeicherte Ansicht nacheinander',
+        },
+        views === 0 ? 'Alle Ansichten rendern' : `Alle ${views} Ansichten rendern`,
+      ),
       queued > 0 ? h('button', { class: 'danger', onclick: actions.cancelQueue }, `Warteschlange leeren (${queued})`) : null,
-      ...renderButtons(actions),
+      group('turntable', 'Drehteller', [
+        field(
+          'Bilder pro Umdrehung',
+          selectControl(
+            TURNTABLE_FRAMES.map((frames) => [frames, `${frames} (alle ${numberFormat.format(360 / frames)}°)`]),
+            output.turntableFrames,
+            (value) => {
+              output.turntableFrames = Number(value);
+              emit('output');
+            },
+          ),
+        ),
+        h(
+          'button',
+          {
+            onclick: actions.renderTurntable,
+            title: 'Das Modell dreht sich einmal um die senkrechte Achse; Kamera und Licht bleiben stehen',
+          },
+          'Drehteller rendern',
+        ),
+        h(
+          'p',
+          { class: 'hint' },
+          `Speichern als Video (eine Umdrehung in ${TURN_SECONDS} s) oder als Einzelbilder. Mehr Bilder laufen flüssiger.`,
+        ),
+      ]),
+      done > 0
+        ? group('renders-save', 'Speichern', [
+            h(
+              'button',
+              { onclick: actions.saveAllRenders, title: 'Alle fertigen Bilder in einer ZIP-Datei, im Format aus „Output“' },
+              `Alle ${done} fertigen als ${format} (ZIP)`,
+            ),
+          ])
+        : null,
     ],
   };
 }

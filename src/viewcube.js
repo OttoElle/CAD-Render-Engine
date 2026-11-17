@@ -41,7 +41,7 @@ function svg(tag, attributes, parent) {
 
 /**
  * Orientation cube in the corner of the viewport. It mirrors the camera
- * orientation; clicking a face or corner turns the view there, the chevrons
+ * orientation; clicking a face, edge or corner turns the view there, the chevrons
  * orbit and the curved arrows roll in 15 degree steps, and the house returns
  * to the standard view.
  */
@@ -72,6 +72,41 @@ export class ViewCube {
           node.title = 'Isometrische Ansicht';
           node.style.transform = `translate3d(${x * HALF}px, ${-y * HALF}px, ${z * HALF}px)`;
           node.addEventListener('click', () => viewer.lookFrom(new THREE.Vector3(x, y, z)));
+        }
+      }
+    }
+
+    // Edges give the twelve views halfway between two faces. Each edge is a
+    // strip that lies along the cube's edge, tilted halfway between its faces.
+    this.edges = [];
+    const unit = [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ];
+    for (let a = 0; a < 3; a++) {
+      for (let b = a + 1; b < 3; b++) {
+        const along = 3 - a - b;
+        for (const sa of [-1, 1]) {
+          for (const sb of [-1, 1]) {
+            // Outward direction in CSS space, from the centre through the edge.
+            const out = [0, 0, 0];
+            out[a] = sa;
+            out[b] = sb;
+            const node = el('button', 'viewcube-edge', this.cube);
+            node.type = 'button';
+            node.title = 'Schrägansicht';
+            const x = new THREE.Vector3(...unit[along]);
+            const z = new THREE.Vector3(...out).normalize();
+            const y = z.clone().cross(x);
+            const t = new THREE.Vector3(...out).multiplyScalar(HALF);
+            const m = [x.x, x.y, x.z, 0, y.x, y.y, y.z, 0, z.x, z.y, z.z, 0, t.x, t.y, t.z, 1];
+            node.style.transform = `matrix3d(${m.map((v) => v.toFixed(5)).join(',')})`;
+            // CSS space has y pointing down and the world has y pointing up.
+            const world = new THREE.Vector3(out[0], -out[1], out[2]);
+            node.addEventListener('click', () => viewer.lookFrom(world.clone()));
+            this.edges.push({ node, out });
+          }
         }
       }
     }
@@ -126,6 +161,10 @@ export class ViewCube {
     for (const { face, node } of this.faces) {
       const depth = m[2] * face.css[0] + m[6] * face.css[1] + m[10] * face.css[2];
       node.classList.toggle('back', depth < 0.02);
+    }
+    for (const { node, out } of this.edges) {
+      const depth = m[2] * out[0] + m[6] * out[1] + m[10] * out[2];
+      node.classList.toggle('back', depth < 0.05);
     }
 
     const project = (point) => [
