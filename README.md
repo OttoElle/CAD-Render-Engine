@@ -15,6 +15,7 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 4:** Entrauschen, eigene HDRI-Umgebungen, gespeicherte Einstellungen
 - [x] **Schritt 5:** Projekte und Vorlagen, helle Oberfläche mit schwebender
   Seitenleiste, genaue Kamerasteuerung mit Tiefenunschärfe, Wahl des Rendergeräts
+- [x] **Schritt 6:** Schnittansichten mit geschlossenen Schnittflächen
 
 ## Ablauf
 
@@ -31,21 +32,26 @@ die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
    stehen als aufklappbare Liste darunter, das Auge blendet sie ein und aus.
    Ein Klick auf ein Bauteil, im Baum oder im Modell, öffnet es mit Sichtbarkeit
    und Material.
-3. **Materialien:** Das Plus legt ein Material an. Bauteile werden in der Liste
+3. **Schnitte:** Das Plus legt eine Schnittebene an, senkrecht zu einer Achse
+   und per Regler verschiebbar. Die Schnittflächen werden geschlossen, wahlweise
+   im Material des Bauteils oder in einer eigenen Farbe. Einzelne Bauteile,
+   etwa Schrauben oder Wellen, lassen sich vom Schnitt ausnehmen. Schnitte
+   gelten in der Ansicht und im fertigen Rendering.
+4. **Materialien:** Das Plus legt ein Material an. Bauteile werden in der Liste
    angehakt oder direkt im Modell angeklickt. Gleiche Bauteile, etwa alle
    Schrauben einer Größe, werden auf Wunsch gemeinsam zugewiesen. Bauteile
    ohne Material behalten ihre CAD-Farbe.
-4. **Szene:** Hintergrundfarbe und Boden mit Schatten.
-5. **Beleuchtung:** Lichtvorlage oder eigene HDRI-Datei (.hdr, .exr), Drehung und Helligkeit.
+5. **Szene:** Hintergrundfarbe und Boden mit Schatten.
+6. **Beleuchtung:** Lichtvorlage oder eigene HDRI-Datei (.hdr, .exr), Drehung und Helligkeit.
    Eine HDRI-Datei lässt sich auch einfach ins Fenster ziehen.
-6. **Perspektive:** Brennweite oder Parallelprojektion, Kamera in Zahlen
+7. **Perspektive:** Brennweite oder Parallelprojektion, Kamera in Zahlen
    (Drehung, Höhe, Rollen, Abstand, Drehpunkt) und Tiefenunschärfe mit Blende
    und wählbarem Fokuspunkt. Das Plus speichert die aktuelle Ansicht.
-7. **Output:** Bildgröße, Qualität, transparenter Hintergrund, Entrauschen und
+8. **Output:** Bildgröße, Qualität, transparenter Hintergrund, Entrauschen und
    das Rendergerät (Grafikkarte oder CPU). Ein Rahmen in der Ansicht zeigt
    genau den Bildausschnitt, der gerendert wird. Der schonende Modus hilft auf
    Laptops und schwächeren Grafikkarten.
-8. **Renderings:** Das Plus startet ein Rendering. Fertige Bilder bleiben als
+9. **Renderings:** Das Plus startet ein Rendering. Fertige Bilder bleiben als
    Einträge stehen und lassen sich als PNG speichern.
 
 Projekte und Vorlagen liegen im Speicher des Browsers (Einstellungen im
@@ -100,6 +106,7 @@ Testmodell liegt unter `samples/Bracket.step`.
   pro Bauteil.
 - `src/viewer.js` ist die Echtzeit-Ansicht (WebGL) mit Kamera, Boden und
   Bildausschnitt, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.
+- `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen.
 - `src/materials.js` enthält die Materialbibliothek, `src/environment.js`
   erzeugt die Lichtvorlagen als HDR-Umgebung direkt im Code.
 - `src/render.js` rendert das Endbild mit

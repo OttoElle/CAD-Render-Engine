@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createMaterial } from './materials.js';
 import { buildEnvironmentTexture, getLightPreset, keyLightDirection, CUSTOM_SHADOW } from './environment.js';
+import { buildCap } from './section.js';
 
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
 const BLACK = new THREE.Color(0x000000);
@@ -45,6 +46,8 @@ export class Viewer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.VSMShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Section cuts clip the parts at planes set per material.
+    this.renderer.localClippingEnabled = true;
 
     this.scene = new THREE.Scene();
     this._backgroundColor = new THREE.Color(BACKGROUNDS.light);
@@ -107,6 +110,40 @@ export class Viewer {
 
     this.parts = [];
     this.highlighted = new Set();
+    /** Active section cuts: { plane (THREE.Plane in CAD coordinates), uncut (Set of part ids left whole) }. */
+    this.sections = [];
+    /** How cut faces look: `mode` 'material' (like the part) or 'color'. */
+    this.capStyle = { mode: 'material', color: '#d9534f' };
+    /** Bounding box of the model in CAD coordinates. */
+    this.modelBox = new THREE.Box3();
+    this._capsDirty = false;
+    this._capsChangedAt = 0;
+    this._capsCost = 0;
+
+    // Outline and faint fill of the section plane that is being edited.
+    this._sectionHelper = new THREE.Group();
+    this._sectionHelper.visible = false;
+    const helperOutline = new THREE.LineLoop(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3)),
+      new THREE.LineBasicMaterial({ color: 0x2563eb }),
+    );
+    const helperFill = new THREE.Mesh(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3)),
+      new THREE.MeshBasicMaterial({
+        color: 0x2563eb,
+        transparent: true,
+        opacity: 0.07,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    );
+    helperFill.geometry.setIndex([0, 1, 2, 0, 2, 3]);
+    helperOutline.raycast = () => {};
+    helperFill.raycast = () => {};
+    helperOutline.frustumCulled = false;
+    helperFill.frustumCulled = false;
+    this._sectionHelper.add(helperFill, helperOutline);
+    this.modelRoot.add(this._sectionHelper);
     this.edgesVisible = true;
     /** Called with the part id (or null) and the hit point when the user clicks in the viewport. */
     this.onPartClick = null;
@@ -177,6 +214,7 @@ export class Viewer {
 
   setParts(parts) {
     for (const part of this.parts) {
+      this._disposeCaps(part);
       this.modelRoot.remove(part.mesh);
       part.mesh.geometry.dispose();
       part.mesh.material.dispose();
@@ -189,7 +227,14 @@ export class Viewer {
     this.parts = parts;
     this.highlighted = new Set();
 
+    this.sections = [];
+    this._sectionHelper.visible = false;
+    this.modelBox.makeEmpty();
     for (const part of parts) {
+      part.caps = [];
+      part.worldPlanes = [];
+      if (!part.mesh.geometry.boundingBox) part.mesh.geometry.computeBoundingBox();
+      this.modelBox.union(part.mesh.geometry.boundingBox);
       part.mesh.userData.partId = part.id;
       part.mesh.castShadow = true;
       // Prefer the real CAD edges from the importer; fall back to crease detection.
@@ -405,7 +450,125 @@ export class Viewer {
     part.mesh.material.dispose();
     part.mesh.material = createMaterial(part);
     if (this.highlighted.has(id)) part.mesh.material.emissive.copy(SELECT_EMISSIVE);
+    this._applyClipping(part);
+    if (this.capStyle.mode === 'material') {
+      for (const cap of part.caps) cap.material = part.mesh.material;
+    }
     this.requestRender();
+  }
+
+  // --- Section cuts -------------------------------------------------------------
+
+  /** The planes that cut the given part, in CAD coordinates. */
+  sectionPlanesFor(part) {
+    return this.sections.filter((section) => !section.uncut.has(part.id)).map((section) => section.plane);
+  }
+
+  /**
+   * Sets the active section cuts. The graphics card clips the parts right
+   * away; the caps that close the cut faces are computed shortly after.
+   */
+  setSections(sections, capStyle) {
+    this.sections = sections;
+    this.capStyle = { ...capStyle };
+    for (const part of this.parts) this._applyClipping(part);
+    this._capsDirty = true;
+    this._capsChangedAt = performance.now();
+    // On heavy models the caps lag behind a moving plane, so they hide until it rests.
+    if (this._capsCost >= 30) {
+      for (const part of this.parts) for (const cap of part.caps) cap.visible = false;
+    }
+    this.requestRender();
+  }
+
+  _applyClipping(part) {
+    const matrix = this.modelRoot.matrixWorld;
+    part.worldPlanes = this.sectionPlanesFor(part).map((plane) => plane.clone().applyMatrix4(matrix));
+    const planes = part.worldPlanes.length > 0 ? part.worldPlanes : null;
+    for (const material of [part.mesh.material, part.edges?.material, part.capMaterial]) {
+      if (!material) continue;
+      material.clippingPlanes = planes;
+      material.clipShadows = true;
+    }
+  }
+
+  _disposeCaps(part) {
+    for (const cap of part.caps || []) {
+      part.mesh.remove(cap);
+      cap.geometry.dispose();
+    }
+    part.caps = [];
+    part.capMaterial?.dispose();
+    part.capMaterial = null;
+  }
+
+  _rebuildCaps() {
+    const started = performance.now();
+    // Slightly inside the kept side, so a cap is not clipped at its own plane.
+    const offset = this.bounds.radius * 2e-4;
+    for (const part of this.parts) {
+      this._disposeCaps(part);
+      const planes = this.sectionPlanesFor(part);
+      if (planes.length === 0) continue;
+      if (this.capStyle.mode === 'color') {
+        part.capMaterial = new THREE.MeshPhysicalMaterial({
+          color: this.capStyle.color,
+          roughness: 0.6,
+          side: THREE.DoubleSide,
+        });
+        this._applyClipping(part);
+      }
+      for (const plane of planes) {
+        const geometry = buildCap(part.mesh.geometry, plane, offset);
+        if (!geometry) continue;
+        const cap = new THREE.Mesh(geometry, part.capMaterial || part.mesh.material);
+        cap.castShadow = true;
+        cap.raycast = () => {};
+        part.mesh.add(cap);
+        part.caps.push(cap);
+      }
+    }
+    this._capsCost = performance.now() - started;
+  }
+
+  /** Shows the outline of a section plane (CAD coordinates) while it is edited, or hides it with null. */
+  setSectionHelper(plane) {
+    this._sectionHelper.visible = Boolean(plane) && !this.modelBox.isEmpty();
+    this.requestRender();
+    if (!this._sectionHelper.visible) return;
+
+    const normal = plane.normal;
+    const u = new THREE.Vector3(Math.abs(normal.x) > 0.9 ? 0 : 1, Math.abs(normal.x) > 0.9 ? 1 : 0, 0);
+    u.addScaledVector(normal, -u.dot(normal)).normalize();
+    const v = new THREE.Vector3().crossVectors(normal, u);
+    // The rectangle around the model's bounding box as seen along the plane normal.
+    const min = new THREE.Vector2(Infinity, Infinity);
+    const max = new THREE.Vector2(-Infinity, -Infinity);
+    const corner = new THREE.Vector3();
+    for (let i = 0; i < 8; i += 1) {
+      corner.set(
+        i & 1 ? this.modelBox.max.x : this.modelBox.min.x,
+        i & 2 ? this.modelBox.max.y : this.modelBox.min.y,
+        i & 4 ? this.modelBox.max.z : this.modelBox.min.z,
+      );
+      const point = new THREE.Vector2(corner.dot(u), corner.dot(v));
+      min.min(point);
+      max.max(point);
+    }
+    const margin = Math.max(max.x - min.x, max.y - min.y) * 0.06;
+    min.subScalar(margin);
+    max.addScalar(margin);
+    const origin = normal.clone().multiplyScalar(-plane.constant);
+    const corners = [
+      [min.x, min.y],
+      [max.x, min.y],
+      [max.x, max.y],
+      [min.x, max.y],
+    ].flatMap(([x, y]) => origin.clone().addScaledVector(u, x).addScaledVector(v, y).toArray());
+    for (const child of this._sectionHelper.children) {
+      child.geometry.attributes.position.array.set(corners);
+      child.geometry.attributes.position.needsUpdate = true;
+    }
   }
 
   setEdgesVisible(visible) {
@@ -584,7 +747,14 @@ export class Viewer {
     this.camera.updateMatrixWorld();
     this._raycaster.setFromCamera(pointer, this.camera);
     const visible = this.parts.filter((p) => p.mesh.visible).map((p) => p.mesh);
-    const hit = this._raycaster.intersectObjects(visible, false)[0];
+    // The clipped-away half of a cut part is still in the mesh; skip hits there.
+    const hit = this._raycaster
+      .intersectObjects(visible, false)
+      .find((candidate) =>
+        this.parts[candidate.object.userData.partId].worldPlanes.every(
+          (plane) => plane.distanceToPoint(candidate.point) >= 0,
+        ),
+      );
     this.onPartClick?.(hit ? hit.object.userData.partId : null, hit ? hit.point.clone() : null);
   }
 
@@ -614,6 +784,12 @@ export class Viewer {
     if (this._viewChanged) {
       this._viewChanged = false;
       this.onViewChange?.();
+    }
+    // Caps follow a moving section plane live when that is cheap, otherwise once it rests.
+    if (this._capsDirty && (this._capsCost < 30 || performance.now() - this._capsChangedAt > 160)) {
+      this._capsDirty = false;
+      this._rebuildCaps();
+      this._needsRender = true;
     }
     if (!this._needsRender) return;
     this._needsRender = false;

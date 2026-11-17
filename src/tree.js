@@ -19,7 +19,7 @@ const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
 
 /**
  * Renders the guided tree. `actions` supplies what the buttons do: openFile,
- * newProject, addMaterial, addView, startRender, togglePart and hover (tints
+ * newProject, addSection, toggleSection, addMaterial, addView, startRender, togglePart and hover (tints
  * parts in the model while the pointer is over their row).
  */
 export function renderTree(container, actions) {
@@ -61,6 +61,25 @@ export function renderTree(container, actions) {
           },
         };
       }),
+    },
+    {
+      key: 'sections',
+      label: 'Schnitte',
+      count: state.sections.length,
+      status: loaded ? 'ok' : null,
+      plus: { title: 'Schnitt anlegen', run: actions.addSection },
+      children: state.sections.map((section) => ({
+        key: `section:${section.id}`,
+        label: section.name,
+        detail: `${'XYZ'[section.axis]} ${Math.round(section.position * 10) / 10} mm`,
+        dimmed: !section.enabled,
+        action: {
+          icon: section.enabled ? 'eye' : 'eyeOff',
+          title: section.enabled ? 'Schnitt ausschalten' : 'Schnitt einschalten',
+          sticky: !section.enabled,
+          run: () => actions.toggleSection(section.id),
+        },
+      })),
     },
     {
       key: 'materials',

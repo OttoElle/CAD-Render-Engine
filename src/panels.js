@@ -307,6 +307,181 @@ function partPanel(part, { actions }) {
   };
 }
 
+function sectionsPanel({ actions }) {
+  const cap = state.sectionCap;
+  return {
+    title: 'Schnitte',
+    body: [
+      h('button', { class: 'primary', onclick: actions.addSection }, 'Schnitt anlegen'),
+      field(
+        'Schnittflächen',
+        selectControl(
+          [
+            ['material', 'Wie das Bauteil'],
+            ['color', 'Eigene Farbe'],
+          ],
+          cap.mode,
+          (value) => {
+            cap.mode = value;
+            emit('sections');
+          },
+        ),
+      ),
+      cap.mode === 'color'
+        ? field(
+            'Farbe',
+            h('input', {
+              type: 'color',
+              value: cap.color,
+              oninput: (event) => {
+                cap.color = event.target.value;
+                emit('sections:live');
+              },
+            }),
+          )
+        : null,
+    ],
+  };
+}
+
+function sectionPanel(section, { viewer, actions }) {
+  const box = viewer.modelBox;
+  const range = () => {
+    const min = box.min.getComponent(section.axis);
+    const max = box.max.getComponent(section.axis);
+    return { min, max, step: Math.max((max - min) / 400, 1e-3) };
+  };
+  const { min, max, step } = range();
+  const positionBox = numberBox('Position mm', {
+    value: section.position,
+    step: Number(step.toPrecision(1)),
+    digits: 2,
+    onchange: (value) => {
+      section.position = value;
+      emit('sections');
+    },
+  });
+  const set = (key) => (value) => {
+    section[key] = value;
+    emit('sections');
+  };
+
+  return {
+    title: 'Schnitt',
+    body: [
+      field(
+        'Name',
+        h('input', {
+          type: 'text',
+          value: section.name,
+          oninput: (event) => {
+            section.name = event.target.value || 'Schnitt';
+            emit('sections:live');
+          },
+        }),
+      ),
+      toggle('Aktiv', section.enabled, set('enabled')),
+      field(
+        'Ebene senkrecht zu',
+        selectControl(
+          [
+            ['0', 'X-Achse'],
+            ['1', 'Y-Achse'],
+            ['2', 'Z-Achse'],
+          ],
+          String(section.axis),
+          (value) => {
+            section.axis = Number(value);
+            const next = range();
+            section.position = (next.min + next.max) / 2;
+            section.flip = actions.sectionFacesCamera(section.axis);
+            emit('sections');
+          },
+        ),
+      ),
+      slider('Position', {
+        min,
+        max,
+        step,
+        value: section.position,
+        format: (value) => `${numberFormat.format(Math.round(value * 10) / 10)} mm`,
+        oninput: (value) => {
+          section.position = value;
+          positionBox.set(value);
+          emit('sections:live');
+        },
+      }),
+      positionBox,
+      toggle('Andere Seite zeigen', section.flip, set('flip')),
+      state.parts.length > 1
+        ? [
+            h(
+              'h3',
+              { title: 'Abgewählte Bauteile bleiben ganz, zum Beispiel Schrauben oder Wellen' },
+              `Geschnittene Bauteile (${state.parts.length - section.uncut.size})`,
+            ),
+            h(
+              'div',
+              { class: 'button-row' },
+              h(
+                'button',
+                {
+                  onclick: () => {
+                    section.uncut.clear();
+                    emit('sections');
+                  },
+                },
+                'Alle',
+              ),
+              h(
+                'button',
+                {
+                  onclick: () => {
+                    for (const part of state.parts) section.uncut.add(part.id);
+                    emit('sections');
+                  },
+                },
+                'Keine',
+              ),
+            ),
+            toggle('Gleiche Bauteile gemeinsam', linkIdentical, (checked) => {
+              linkIdentical = checked;
+            }),
+            partList(
+              state.parts,
+              (part) => [
+                h('input', {
+                  type: 'checkbox',
+                  checked: !section.uncut.has(part.id),
+                  onchange: (event) => {
+                    for (const item of identicalParts(part)) {
+                      if (event.target.checked) section.uncut.delete(item.id);
+                      else section.uncut.add(item.id);
+                    }
+                    emit('sections');
+                  },
+                }),
+                h('span', { class: 'part-name' }, part.label),
+              ],
+              actions,
+            ),
+          ]
+        : null,
+      h(
+        'button',
+        {
+          class: 'danger',
+          onclick: () => {
+            state.sections = state.sections.filter((other) => other !== section);
+            select('sections');
+          },
+        },
+        'Schnitt löschen',
+      ),
+    ],
+  };
+}
+
 function materialsPanel({ actions }) {
   return {
     title: 'Materialien',
@@ -862,7 +1037,11 @@ export function renderPanel(container, context) {
   else if (key === 'geometry') panel = geometryPanel(context);
   else if (state.parts.length === 0) panel = null;
   else if (kind === 'part') panel = state.parts[id] ? partPanel(state.parts[id], context) : null;
-  else if (key === 'materials') panel = materialsPanel(context);
+  else if (key === 'sections') panel = sectionsPanel(context);
+  else if (kind === 'section') {
+    const section = state.sections.find((item) => item.id === id);
+    panel = section ? sectionPanel(section, context) : null;
+  } else if (key === 'materials') panel = materialsPanel(context);
   else if (key === 'material:cad') panel = cadMaterialPanel(context);
   else if (kind === 'material') {
     const entry = state.materials.find((item) => item.id === id);

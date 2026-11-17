@@ -5,6 +5,7 @@ import {
   defaultLighting,
   defaultCamera,
   defaultOutput,
+  defaultSectionCap,
   QUALITY,
   OUTPUT_SIZES,
   RENDER_DEVICES,
@@ -136,6 +137,15 @@ function modelSnapshot() {
       partIds: [...entry.partIds],
     })),
     views: state.views.map(({ name, position, target, fov, roll }) => ({ name, position, target, fov, roll })),
+    sections: state.sections.map(({ name, axis, position, flip, enabled, uncut }) => ({
+      name,
+      axis,
+      position,
+      flip,
+      enabled,
+      uncut: [...uncut],
+    })),
+    sectionCap: { ...state.sectionCap },
     hidden: state.parts.filter((part) => !part.mesh.visible).map((part) => part.id),
     view: viewProvider(),
   };
@@ -181,6 +191,18 @@ export function applyModelData(record) {
     partIds: new Set((entry.partIds || []).filter(valid)),
   }));
   state.views = (record.views || []).map((view) => ({ id: newId(), ...view }));
+  state.sections = (record.sections || [])
+    .filter((section) => [0, 1, 2].includes(section.axis) && Number.isFinite(section.position))
+    .map((section) => ({
+      id: newId(),
+      name: String(section.name || 'Schnitt'),
+      axis: section.axis,
+      position: section.position,
+      flip: Boolean(section.flip),
+      enabled: section.enabled !== false,
+      uncut: new Set((section.uncut || []).filter(valid)),
+    }));
+  state.sectionCap = mergeTyped(defaultSectionCap(), record.sectionCap);
   return { hidden: (record.hidden || []).filter(valid), view: record.view || null };
 }
 

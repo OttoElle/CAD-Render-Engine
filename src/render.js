@@ -3,6 +3,7 @@ import { WebGPUPathTracer, OIDNDenoiser } from 'three-gpu-pathtracer/webgpu';
 import { PhysicalCamera } from 'three-gpu-pathtracer/src/objects/PhysicalCamera.js';
 import { initUNetFromURL } from 'oidn-webgpu';
 import { fovToFocalLength } from './viewer.js';
+import { boxSide, buildCap, clipGeometry } from './section.js';
 
 // Open Image Denoise model, shipped with the app so rendering works offline.
 const DENOISE_WEIGHTS_URL = `${import.meta.env.BASE_URL}oidn/rt_hdr_alb_nrm_small.tza`;
@@ -20,7 +21,44 @@ function buildRenderScene(viewer, { transparent, ground }) {
     if (!part.mesh.visible) continue;
     const material = part.mesh.material.clone();
     material.emissive.setScalar(0);
-    root.add(new THREE.Mesh(part.mesh.geometry, material));
+    // The viewport lets the graphics card clip; the path tracer needs real cut geometry.
+    material.clippingPlanes = null;
+
+    const source = part.mesh.geometry;
+    const planes = viewer.sectionPlanesFor(part);
+    const sides = planes.map((plane) => boxSide(source.boundingBox, plane));
+    if (sides.includes(-1)) continue; // cut away completely
+    const cutting = planes.filter((plane, i) => sides[i] === 0);
+    if (cutting.length === 0) {
+      root.add(new THREE.Mesh(source, material));
+      continue;
+    }
+
+    const geometry = clipGeometry(source, cutting);
+    if (!geometry) continue;
+    const own = (mesh) => {
+      mesh.userData.ownGeometry = true;
+      root.add(mesh);
+    };
+    own(new THREE.Mesh(geometry, material));
+
+    // Close the cut faces, each cap trimmed by the other planes.
+    const capMaterial =
+      viewer.capStyle.mode === 'color'
+        ? new THREE.MeshPhysicalMaterial({ color: viewer.capStyle.color, roughness: 0.6 })
+        : material;
+    for (const plane of cutting) {
+      let cap = buildCap(source, plane);
+      if (cap && cutting.length > 1) {
+        const trimmed = clipGeometry(
+          cap,
+          cutting.filter((other) => other !== plane),
+        );
+        cap.dispose();
+        cap = trimmed;
+      }
+      if (cap) own(new THREE.Mesh(cap, capMaterial));
+    }
   }
   scene.add(root);
 
@@ -229,7 +267,9 @@ export async function startRender(viewer, options) {
     pathTracer.dispose();
     for (const object of scene.children) {
       object.traverse((child) => {
-        if (child.isMesh) child.material.dispose();
+        if (!child.isMesh) return;
+        child.material.dispose();
+        if (child.userData.ownGeometry) child.geometry.dispose();
       });
     }
     renderer.dispose();

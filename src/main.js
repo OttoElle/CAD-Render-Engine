@@ -26,6 +26,7 @@ import {
   files,
   fileKeys,
 } from './persistence.js';
+import { sectionToPlane } from './section.js';
 import { renderTree, setCollapsed } from './tree.js';
 import { renderPanel, identicalParts } from './panels.js';
 import { h } from './dom.js';
@@ -109,6 +110,50 @@ function applySceneAndLighting() {
     ground: state.scene.ground,
     background: state.scene.background,
   });
+}
+
+/** Hands the active section cuts to the 3D view and outlines the one being edited. */
+function applySections() {
+  viewer.setSections(
+    state.sections
+      .filter((section) => section.enabled)
+      .map((section) => ({ plane: sectionToPlane(section), uncut: section.uncut })),
+    state.sectionCap,
+  );
+  const [kind, idText] = state.selected.split(':');
+  const edited = kind === 'section' ? state.sections.find((item) => item.id === Number(idText)) : null;
+  viewer.setSectionHelper(edited ? sectionToPlane(edited) : null);
+}
+
+/** Direction from the model to the camera in CAD coordinates (Z up). */
+function cameraDirectionCad() {
+  const [x, y, z] = viewer.camera.position.clone().sub(viewer.controls.target).toArray();
+  return [x, -z, y];
+}
+
+/** Whether a cut along `axis` must be flipped to keep the half away from the camera, so the cut face is in view. */
+function sectionFacesCamera(axis) {
+  return cameraDirectionCad()[axis] > 0;
+}
+
+/** Adds a cut through the middle of the model that opens it up towards the camera. */
+function addSection() {
+  if (state.parts.length === 0) return;
+  // Pick the horizontal axis the camera looks along most.
+  const cad = cameraDirectionCad();
+  const axis = Math.abs(cad[0]) >= Math.abs(cad[1]) ? 0 : 1;
+  const center = viewer.modelBox.getCenter(new Vector3());
+  const section = {
+    id: newId(),
+    name: `Schnitt ${state.sections.length + 1}`,
+    axis,
+    position: center.getComponent(axis),
+    flip: sectionFacesCamera(axis),
+    enabled: true,
+    uncut: new Set(),
+  };
+  state.sections.push(section);
+  select(`section:${section.id}`);
 }
 
 /** Pixel size of the final image for the current output settings. */
@@ -533,6 +578,14 @@ const actions = {
     deleteTemplate(id);
     emit('project');
   },
+  addSection,
+  sectionFacesCamera,
+  toggleSection: (id) => {
+    const section = state.sections.find((item) => item.id === id);
+    if (!section) return;
+    section.enabled = !section.enabled;
+    emit('sections');
+  },
   addMaterial: () => {
     if (state.parts.length === 0) return;
     const entry = addMaterial();
@@ -580,6 +633,7 @@ function refresh(what) {
 
   if (area === 'model' || area === 'materials') applyMaterials();
   if (area === 'model' || area === 'scene' || area === 'lighting') applySceneAndLighting();
+  if (area === 'model' || area === 'sections' || what === 'selection') applySections();
 
   if (what === 'selection') {
     clickHighlight = [];

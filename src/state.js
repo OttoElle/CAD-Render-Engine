@@ -3,6 +3,7 @@ import { getMaterialDef } from './materials.js';
 export const defaultScene = () => ({ background: 'light', ground: true });
 export const defaultLighting = () => ({ presetId: 'studio-soft', rotation: 0, intensity: 1, hdriName: null });
 export const defaultCamera = () => ({ dof: false, fStop: 4, focusPoint: null });
+export const defaultSectionCap = () => ({ mode: 'material', color: '#d9534f' });
 export const defaultOutput = () => ({
   size: 'view',
   width: 1920,
@@ -27,6 +28,13 @@ export const state = {
   templates: [],
   fileName: null,
   parts: [],
+  /**
+   * Section cuts: { id, name, axis (0 = X, 1 = Y, 2 = Z in CAD coordinates), position (mm),
+   * flip, enabled, uncut:Set of part ids that stay whole }.
+   */
+  sections: [],
+  /** How cut faces look: `mode` 'material' (like the part) or 'color'. */
+  sectionCap: defaultSectionCap(),
   /** Material entries: { id, materialId, colorHex, partIds:Set }. A part is in at most one entry. */
   materials: [],
   /** `background` is 'light', 'grey', 'white', 'dark', 'environment' (show the HDRI) or a hex colour. */
@@ -100,6 +108,8 @@ export function resetForModel(fileName, parts) {
   state.fileName = fileName;
   state.parts = parts;
   state.materials = [];
+  state.sections = [];
+  state.sectionCap = defaultSectionCap();
   state.views = [];
 }
 
