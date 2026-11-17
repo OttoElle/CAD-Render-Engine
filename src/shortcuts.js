@@ -8,6 +8,7 @@ export const SHORTCUT_ACTIONS = {
   edges: { label: 'Show or hide edges', key: 'e' },
   axes: { label: 'Show or hide the coordinate system', key: 'a' },
   guides: { label: 'Show or hide guide lines', key: 'g' },
+  move: { label: 'Move and rotate the selected parts', key: 'm' },
 };
 
 const STORAGE_KEY = 'clearcoat:shortcuts';

@@ -28,6 +28,7 @@ import {
   defaultPartExplode,
 } from './explode.js';
 import { FILE_FORMATS } from './export.js';
+import { HATCH_PATTERNS } from './hatch.js';
 import { getLightPreset, presetLights, sanitizeLight } from './environment.js';
 
 /**
@@ -323,6 +324,7 @@ function modelSnapshot() {
     })),
     sectionCap: { ...state.sectionCap },
     hidden: state.parts.filter((part) => !part.mesh.visible).map((part) => part.id),
+    removed: state.parts.filter((part) => part.removed).map((part) => part.id),
     view: viewProvider(),
   };
 }
@@ -376,6 +378,7 @@ export function applySettings(record) {
   if (!['linear', 'radial'].includes(state.scene.gradientType)) state.scene.gradientType = 'linear';
   state.scene.reflection = Math.min(Math.max(state.scene.reflection, 0), 1);
   state.scene.reflectionBlur = Math.min(Math.max(state.scene.reflectionBlur, 0), 1);
+  state.scene.shadow = Math.min(Math.max(state.scene.shadow, 0), 1);
   for (const key of ['gradientFrom', 'gradientTo', 'coveColor']) {
     if (!/^#[0-9a-f]{6}$/i.test(state.scene[key])) state.scene[key] = defaultScene()[key];
   }
@@ -446,7 +449,17 @@ export function applyModelData(record) {
       uncut: new Set((section.uncut || []).filter(valid)),
     }));
   state.sectionCap = mergeTyped(defaultSectionCap(), record.sectionCap);
-  return { hidden: (record.hidden || []).filter(valid), view: record.view || null };
+  const cap = state.sectionCap;
+  if (!['material', 'color'].includes(cap.mode)) cap.mode = 'material';
+  if (!HATCH_PATTERNS[cap.hatch]) cap.hatch = 'none';
+  for (const key of ['color', 'hatchColor']) if (!/^#[0-9a-f]{6}$/i.test(cap[key])) cap[key] = defaultSectionCap()[key];
+  cap.hatchSpacing = Number.isFinite(cap.hatchSpacing) ? Math.min(Math.max(cap.hatchSpacing, 0), 1000) : 0;
+  cap.hatchAngle = Number.isFinite(cap.hatchAngle) ? cap.hatchAngle % 180 : 45;
+  return {
+    hidden: (record.hidden || []).filter(valid),
+    removed: (record.removed || []).filter(valid),
+    view: record.view || null,
+  };
 }
 
 /**

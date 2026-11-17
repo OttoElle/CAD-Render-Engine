@@ -946,7 +946,6 @@ input[role='switch']:checked::before {
 
 .panel-header h2 {
   flex: 0 1 auto;
-  margin-right: auto;
   min-width: 0;
   margin: 0;
   font-size: 15px;
@@ -1970,4 +1969,117 @@ button.active {
 .gallery-large .button-row button {
   flex: 0 1 auto;
   padding: 0 12px;
+}
+
+/* The header's buttons sit together at the right edge, centred on the title line. */
+.panel-header-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+/* --- Menus: titles, colour swatches and second level ---------------------------- */
+
+.menu .menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu button.has-submenu .icon:last-child {
+  margin: 0 -4px 0 8px;
+}
+
+.menu button.open {
+  background: var(--page);
+}
+
+.menu-heading {
+  padding: 6px 10px 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.menu-swatch {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-right: 7px;
+  border-radius: 50%;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+}
+
+.menu.submenu {
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+}
+
+/* --- Move tool in the viewport ---------------------------------------------------- */
+
+#viewport.over-handle {
+  cursor: grab;
+}
+
+#viewport.dragging-handle {
+  cursor: grabbing;
+}
+
+.manip-value {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.manip-value[hidden] {
+  display: none;
+}
+
+.manip-value input {
+  width: auto;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+}
+
+.manip-value.editable {
+  border-color: var(--accent);
+  pointer-events: auto;
+}
+
+.manip-value.editable input {
+  background: var(--accent-soft);
+}
+
+.manip-value span {
+  color: var(--muted);
+}
+
+.icon-button.small {
+  width: 22px;
+  height: 22px;
+}
+
+.part-list li .swatch {
+  width: 12px;
+  height: 12px;
 }

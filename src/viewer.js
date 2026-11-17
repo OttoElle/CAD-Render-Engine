@@ -4,7 +4,8 @@ import { createMaterial, finishFrame, applyFinishTangents } from './materials.js
 import { buildEnvironmentTexture, getLightPreset, CUSTOM_SHADOW } from './environment.js';
 import { buildCap } from './section.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
-import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { Manipulator } from './manipulator.js';
+import { createCapMaterial, applyHatchUv, hatchAngleFor, hatchSpacing } from './hatch.js';
 import { buildCoveGeometry, placeCove, gradientCss, floorMaterialParams, coveAlbedo, REFLECTION_F90_SCALE } from './backdrop.js';
 
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
@@ -176,6 +177,7 @@ export class Viewer {
       coveColor: '#e4e6ea',
       reflection: 0,
       reflectionBlur: 0.1,
+      shadow: 1,
     };
 
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.1, 1000);
@@ -184,8 +186,8 @@ export class Viewer {
     this.controls = new CadControls(this.camera, canvas, {
       pickPoint: (x, y) => this._pick(x, y)?.point ?? null,
       pivotFallback: () => this.bounds.center.clone(),
-      // A press on the move gizmo moves the part, not the camera.
-      blocked: () => Boolean(this.gizmo?.object && this.gizmo.axis),
+      // A press on the move tool moves the parts, not the camera.
+      blocked: () => Boolean(this.manipulator?.busy),
     });
     // Only flags here: the roll is re-applied in _syncCamera before anyone looks at the camera.
     this.controls.addEventListener('change', () => {
@@ -262,20 +264,13 @@ export class Viewer {
     }
     this.modelRoot.add(this.axesHelper);
 
-    // Gizmo for moving a part with the mouse.
-    this.gizmo = new TransformControls(this.camera, canvas);
-    this.gizmo.setSpace('local');
-    this.gizmo.setSize(0.8);
-    this._gizmoProxy = new THREE.Object3D();
-    this.modelRoot.add(this._gizmoProxy);
-    this._gizmoHelper = this.gizmo.getHelper();
-    this.scene.add(this._gizmoHelper);
-    this.gizmo.addEventListener('change', () => this.requestRender());
-    this.gizmo.addEventListener('dragging-changed', (event) => {
-      this._gizmoDragging = event.value;
-      if (!event.value) this._gizmoEnd?.();
+    // Tool for moving and turning parts with the mouse.
+    this.manipulator = new Manipulator({
+      camera: this.camera,
+      canvas,
+      parent: this.modelRoot,
+      requestRender: () => this.requestRender(),
     });
-    this.gizmo.addEventListener('objectChange', () => this._gizmoMove?.());
     this.edgesVisible = true;
     /** Called with the part id (or null) and the hit point when the user clicks in the viewport. */
     this.onPartClick = null;
@@ -300,14 +295,13 @@ export class Viewer {
 
     canvas.addEventListener('pointerdown', (e) => {
       this._pointerDown = { x: e.clientX, y: e.clientY };
-      this._pointerDownOnGizmo = Boolean(this.gizmo.object && this.gizmo.axis);
     });
     canvas.addEventListener('pointerup', (e) => this._handleClick(e));
     canvas.addEventListener('pointermove', (e) => {
       if (e.buttons !== 0 || !this.hoverEnabled) return;
       cancelAnimationFrame(this._hoverFrame);
       this._hoverFrame = requestAnimationFrame(() => {
-        const hit = this.gizmo.axis ? null : this._pick(e.clientX, e.clientY);
+        const hit = this.manipulator.hovered ? null : this._pick(e.clientX, e.clientY);
         this._setHovered(hit ? hit.object.userData.partId : null);
       });
     });
@@ -374,47 +368,18 @@ export class Viewer {
     this.axesHelper.scale.setScalar(Math.max(reach, 1e-3));
   }
 
-  /**
-   * Shows the gizmo at a point in CAD coordinates. In 'translate' mode
-   * `onMove(delta)` gets the distance moved since the drag started, in CAD
-   * coordinates; in 'rotate' mode it gets the turn since the drag started, as
-   * a quaternion [x, y, z, w] about the CAD axes. It gets null when a drag ends.
-   */
-  attachGizmo(point, onMove, mode = 'translate') {
-    this.gizmo.setMode(mode);
-    this._gizmoProxy.position.fromArray(point);
-    this._gizmoProxy.quaternion.identity();
-    this._gizmoStart = this._gizmoProxy.position.clone();
-    this._gizmoMove = () =>
-      onMove(
-        mode === 'rotate'
-          ? this._gizmoProxy.quaternion.toArray()
-          : this._gizmoProxy.position.clone().sub(this._gizmoStart).toArray(),
-      );
-    this._gizmoEnd = () => {
-      this._gizmoStart = this._gizmoProxy.position.clone();
-      // The rings stay lined up with the CAD axes for the next turn.
-      this._gizmoProxy.quaternion.identity();
-      onMove(null);
-    };
-    this.gizmo.attach(this._gizmoProxy);
-    this.requestRender();
+  /** Shows the move and rotate tool at a point in CAD coordinates (see Manipulator.attach). */
+  attachGizmo(point, callbacks) {
+    this.manipulator.attach(point, callbacks);
   }
 
-  /** Moves the gizmo along when the part was moved some other way. */
+  /** Moves the tool along when the parts were moved some other way. */
   placeGizmo(point) {
-    if (!this.gizmo.object || this._gizmoDragging) return;
-    this._gizmoProxy.position.fromArray(point);
-    this._gizmoStart = this._gizmoProxy.position.clone();
-    this.requestRender();
+    this.manipulator.place(point);
   }
 
   detachGizmo() {
-    if (!this.gizmo.object) return;
-    this.gizmo.detach();
-    this._gizmoMove = null;
-    this._gizmoEnd = null;
-    this.requestRender();
+    this.manipulator.detach();
   }
 
   /** Camera roll around the viewing axis in radians. The controls level the camera, so it is re-applied after each update. */
@@ -469,7 +434,7 @@ export class Viewer {
   captureThumbnail(width = 480, height = 300) {
     if (this.parts.length === 0) return null;
     // The drawing buffer is only readable right after rendering; helpers stay out of the picture.
-    const helpers = [this.axesHelper, this._gizmoHelper].map((object) => [object, object.visible]);
+    const helpers = [this.axesHelper, this.manipulator.root].map((object) => [object, object.visible]);
     for (const [object] of helpers) object.visible = false;
     const highlighted = this.highlighted;
     const hovered = this._hovered;
@@ -621,6 +586,7 @@ export class Viewer {
     const box = new THREE.Box3();
     const partBox = new THREE.Box3();
     for (const part of this.parts) {
+      if (part.removed) continue;
       box.union(partBox.copy(part.mesh.geometry.boundingBox).applyMatrix4(part.mesh.matrixWorld));
     }
     box.getBoundingSphere(this.bounds);
@@ -845,7 +811,7 @@ export class Viewer {
     this.shadowLight.shadow.radius = this._shadowSettings.radius;
     this.shadowLight.shadow.bias = -0.0005;
 
-    this.ground.material.opacity = this._shadowSettings.opacity;
+    this.ground.material.opacity = this._shadowSettings.opacity * (this.lighting.shadow ?? 1);
     this.ground.scale.setScalar(radius * 12);
     this.ground.position.set(center.x, this._groundY ?? center.y - radius, center.z);
     if (this.reflector) {
@@ -907,8 +873,11 @@ export class Viewer {
     part.mesh.material = createMaterial(part);
     if (this.highlighted.has(id)) part.mesh.material.emissive.copy(SELECT_EMISSIVE);
     this._applyClipping(part);
-    if (this.capStyle.mode === 'material') {
+    if (!part.capMaterial) {
       for (const cap of part.caps) cap.material = part.mesh.material;
+    } else if (this.capStyle.mode === 'material' && part.caps.length > 0) {
+      // Hatched caps show the part's colour under the lines.
+      this._capsDirty = true;
     }
     this.requestRender();
   }
@@ -990,18 +959,14 @@ export class Viewer {
       this._disposeCaps(part);
       const planes = this.sectionPlanesFor(part);
       if (planes.length === 0) continue;
-      if (this.capStyle.mode === 'color') {
-        part.capMaterial = new THREE.MeshPhysicalMaterial({
-          color: this.capStyle.color,
-          roughness: 0.6,
-          side: THREE.DoubleSide,
-        });
-        this._applyClipping(part);
-      }
+      part.capMaterial = createCapMaterial(this.capStyle, part.mesh.material, part.colorHex || '#c9ced6');
+      if (part.capMaterial) this._applyClipping(part);
+      const hatched = this.capStyle.hatch !== 'none';
       for (const plane of planes) {
         const geometry = buildCap(part.mesh.geometry, plane, offset);
         if (!geometry) continue;
-        if (part.finishFrame && !part.capMaterial) applyFinishTangents(geometry, part.look.finish, part.finishFrame);
+        if (hatched) applyHatchUv(geometry, plane, hatchSpacing(this.capStyle, this.modelBox), hatchAngleFor(this.capStyle, part.id));
+        else if (part.finishFrame && !part.capMaterial) applyFinishTangents(geometry, part.look.finish, part.finishFrame);
         const cap = new THREE.Mesh(geometry, part.capMaterial || part.mesh.material);
         cap.castShadow = true;
         cap.raycast = () => {};
@@ -1225,7 +1190,6 @@ export class Viewer {
   _handleClick(event) {
     const down = this._pointerDown;
     this._pointerDown = null;
-    if (this._pointerDownOnGizmo) return;
     // Ignore drags: only a click without movement selects a part.
     if (!down || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return;
     if (event.button !== 0 || this.parts.length === 0) return;
@@ -1305,6 +1269,7 @@ export class Viewer {
     }
     if (!this._needsRender) return;
     this._needsRender = false;
+    this.manipulator.update();
     this.renderer.render(this.scene, this.camera);
   }
 }

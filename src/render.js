@@ -18,6 +18,7 @@ import {
   environmentSampler,
   coveAlbedo,
 } from './backdrop.js';
+import { createCapMaterial, applyHatchUv, hatchAngleFor, hatchSpacing } from './hatch.js';
 
 // Open Image Denoise model, shipped with the app so rendering works offline.
 const DENOISE_WEIGHTS_URL = `${import.meta.env.BASE_URL}oidn/rt_hdr_alb_nrm_small.tza`;
@@ -67,10 +68,8 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
     own(new THREE.Mesh(geometry, material));
 
     // Close the cut faces, each cap trimmed by the other planes.
-    const capMaterial =
-      viewer.capStyle.mode === 'color'
-        ? new THREE.MeshPhysicalMaterial({ color: viewer.capStyle.color, roughness: 0.6 })
-        : material;
+    const capMaterial = createCapMaterial(viewer.capStyle, material, part.colorHex || '#c9ced6') || material;
+    const hatched = viewer.capStyle.hatch !== 'none';
     for (const plane of cutting) {
       let cap = buildCap(source, plane);
       if (cap && cutting.length > 1) {
@@ -82,7 +81,8 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
         cap = trimmed;
       }
       if (!cap) continue;
-      if (capMaterial === material) finish?.(cap);
+      if (hatched) applyHatchUv(cap, plane, hatchSpacing(viewer.capStyle, viewer.modelBox), hatchAngleFor(viewer.capStyle, part.id));
+      else if (capMaterial === material) finish?.(cap);
       own(new THREE.Mesh(cap, capMaterial));
     }
   }
@@ -135,6 +135,10 @@ function buildFloor(viewer, camera, backdrop, aspect, environmentRotation) {
   const geometry = buildFloorGeometry(radius, radius * 60);
   const position = geometry.attributes.position;
   const colors = new Float32Array(position.count * 4);
+  const targets = new Float32Array(position.count * 3);
+  const scales = new Float32Array(position.count);
+  const lowest = [Infinity, Infinity, Infinity];
+  const shadowStrength = Math.min(Math.max(backdrop.shadow ?? 1, 0), 1);
   const irradiance = viewer.environmentTexture.userData.floorIrradiance;
   const intensity = Math.max(viewer.scene.environmentIntensity, 1e-3);
   const { gradient, reflection, reflectionBlur } = backdrop;
@@ -205,17 +209,32 @@ function buildFloor(viewer, camera, backdrop, aspect, environmentRotation) {
       target.b -= fresnel * sum.b * intensity;
     }
 
-    const scale = Math.PI / (Math.max(1 - fresnel, 1e-3) * intensity);
-    colors[i * 4] = Math.min(Math.max((target.r * scale) / irradiance[0], 0), 0.98);
-    colors[i * 4 + 1] = Math.min(Math.max((target.g * scale) / irradiance[1], 0), 0.98);
-    colors[i * 4 + 2] = Math.min(Math.max((target.b * scale) / irradiance[2], 0), 0.98);
+    targets[i * 3] = Math.max(target.r, 0);
+    targets[i * 3 + 1] = Math.max(target.g, 0);
+    targets[i * 3 + 2] = Math.max(target.b, 0);
+    scales[i] = Math.PI / (Math.max(1 - fresnel, 1e-3) * intensity);
+    for (let c = 0; c < 3; c++) lowest[c] = Math.min(lowest[c], targets[i * 3 + c]);
+  }
+  // A lighter shadow: the floor glows by a share of its colour where nothing shades it, and
+  // reflects correspondingly less, so it still matches the background but never gets darker
+  // than that glow.
+  const glow = lowest.map((value) => value * (1 - shadowStrength));
+  for (let i = 0; i < position.count; i++) {
+    for (let c = 0; c < 3; c++) {
+      colors[i * 4 + c] = Math.min(Math.max(((targets[i * 3 + c] - glow[c]) * scales[i]) / irradiance[c], 0), 0.98);
+    }
     colors[i * 4 + 3] = 1;
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 4));
 
   const floor = new THREE.Mesh(
     geometry,
-    new THREE.MeshPhysicalMaterial({ color: 0xffffff, vertexColors: true, ...floorMaterialParams(reflection, reflectionBlur) }),
+    new THREE.MeshPhysicalMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      emissive: new THREE.Color().setRGB(...glow, THREE.LinearSRGBColorSpace),
+      ...floorMaterialParams(reflection, reflectionBlur),
+    }),
   );
   floor.position.set(center.x, groundY, center.z);
   floor.userData.ownGeometry = true;
@@ -229,6 +248,8 @@ function buildFloor(viewer, camera, backdrop, aspect, environmentRotation) {
  * rays pass through it does the same here.
  */
 function buildCove(viewer, camera, backdrop) {
+  // A lighter shadow works like on the flat floor: part of the colour glows instead of reflecting light.
+  const strength = Math.min(Math.max(backdrop.shadow ?? 1, 0), 1);
   const cove = new THREE.Mesh(
     buildCoveGeometry(viewer.bounds.radius),
     new THREE.MeshPhysicalMaterial({
@@ -236,7 +257,8 @@ function buildCove(viewer, camera, backdrop) {
         backdrop.coveColor,
         viewer.environmentTexture.userData.floorIrradiance,
         viewer.scene.environmentIntensity,
-      ),
+      ).multiplyScalar(strength),
+      emissive: new THREE.Color(backdrop.coveColor).multiplyScalar(1 - strength),
       ...floorMaterialParams(backdrop.reflection, backdrop.reflectionBlur, 0.9),
     }),
   );

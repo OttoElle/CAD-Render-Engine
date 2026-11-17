@@ -19,6 +19,7 @@ import {
   materialEntryOf,
   materialEntryLabel,
   setPartsAssigned,
+  presentParts,
 } from './state.js';
 import {
   MATERIALS,
@@ -30,10 +31,12 @@ import {
   isDefaultTuning,
 } from './materials.js';
 import { LIGHT_PRESETS, MAX_LIGHT_SIZE, getLightPreset, presetLights } from './environment.js';
-import { EXPLODE_DIRECTIONS, PART_EXPLODE_DIRECTIONS, partExplode, setPartExplode } from './explode.js';
+import { EXPLODE_DIRECTIONS, PART_EXPLODE_DIRECTIONS, partExplode, setPartExplode, hasExplode } from './explode.js';
+import { HATCH_PATTERNS, hatchSpacing } from './hatch.js';
 import { FILE_FORMATS, videoSupported } from './export.js';
 import { ADJUSTMENTS, isNeutral } from './adjust.js';
 import { GUIDE_TYPES } from './guides.js';
+import { shortcutLabel } from './shortcuts.js';
 
 const numberFormat = new Intl.NumberFormat('en-US');
 const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
@@ -281,8 +284,10 @@ function geometryPanel({ actions }) {
     };
   }
 
-  const triangles = state.parts.reduce((sum, part) => sum + part.triangles, 0);
-  const hidden = state.parts.filter((part) => !part.mesh.visible).length;
+  const parts = presentParts();
+  const removed = state.parts.length - parts.length;
+  const triangles = parts.reduce((sum, part) => sum + part.triangles, 0);
+  const hidden = parts.filter((part) => !part.mesh.visible).length;
   const moved = new Set([...state.partOffsets.keys(), ...state.partRotations.keys()]).size;
   return {
     title: state.fileName,
@@ -291,9 +296,16 @@ function geometryPanel({ actions }) {
       h(
         'p',
         { class: 'hint' },
-        `${plural(state.parts.length, 'part', 'parts')} · ${plural(triangles, 'triangle', 'triangles')}` +
+        `${plural(parts.length, 'part', 'parts')} · ${plural(triangles, 'triangle', 'triangles')}` +
           (hidden > 0 ? ` · ${hidden} hidden` : ''),
       ),
+      removed > 0
+        ? notice(`${plural(removed, 'part was', 'parts were')} deleted from the model.`, {
+            label: 'Bring back',
+            icon: 'undo',
+            run: actions.restoreParts,
+          })
+        : null,
       field(
         'Up axis',
         selectControl(Object.entries(UP_AXES), state.upAxis, (value) => {
@@ -323,7 +335,7 @@ function geometryPanel({ actions }) {
 }
 
 /** Exploded view: how far apart the parts move, in which direction and from where. */
-function explodePanel() {
+function explodePanel({ actions }) {
   return {
     title: 'Exploded view',
     icon: 'explode',
@@ -331,7 +343,106 @@ function explodePanel() {
       h('p', { class: 'hint' }, 'Pulls the parts of an assembly apart to show how it is built. Render jobs keep their own setting.'),
       explodeControls(false),
     ],
+    footer: [deleteButton('Remove', actions.deleteExplode)],
   };
+}
+
+/** Several parts picked with Ctrl or Shift: what they can do together. */
+function partsSelectionPanel(parts, { actions }) {
+  const ids = parts.map((part) => part.id);
+  const anyHidden = parts.some((part) => !part.mesh.visible);
+  const placed = ids.some((id) => state.partOffsets.has(id) || state.partRotations.has(id));
+  const entries = new Set(parts.map((part) => materialEntryOf(part.id)?.id ?? 'cad'));
+  const assign = (value) => {
+    if (value === 'mixed') return;
+    if (value === 'cad') {
+      setPartsAssigned(null, ids, false);
+    } else if (value === 'new') {
+      const created = addMaterial(undefined, { claimAll: false });
+      setPartsAssigned(created, ids, true);
+      select(`material:${created.id}`);
+    } else {
+      const target = state.materials.find((item) => item.id === Number(value));
+      if (target) setPartsAssigned(target, ids, true);
+    }
+  };
+  return {
+    title: `${parts.length} parts`,
+    icon: 'partGroup',
+    body: [
+      h('p', { class: 'hint' }, 'Ctrl or Shift + click parts in the tree or the viewport to add or remove them.'),
+      partList(
+        parts,
+        (part) => [
+          h('span', { class: 'swatch', style: { background: part.colorHex } }),
+          h('span', { class: 'part-name' }, part.label),
+          h(
+            'button',
+            {
+              class: 'icon-button small',
+              title: 'Take out of the selection',
+              'aria-label': 'Take out of the selection',
+              onclick: () => actions.selectPart(part.id, true),
+            },
+            icon('close', 14),
+          ),
+        ],
+        actions,
+      ),
+      field(
+        'Material',
+        selectControl(
+          [
+            ...(entries.size > 1 ? [['mixed', 'Different']] : []),
+            ['cad', 'CAD colour'],
+            ...state.materials.map((item) => [String(item.id), materialEntryLabel(item)]),
+            ['new', 'New material …'],
+          ],
+          entries.size > 1 ? 'mixed' : String([...entries][0]),
+          assign,
+        ),
+      ),
+      h(
+        'div',
+        { class: 'button-row' },
+        h('button', { onclick: () => actions.setPartsVisible(ids, anyHidden) }, icon(anyHidden ? 'eye' : 'eyeOff', 15), anyHidden ? 'Show' : 'Hide'),
+        h('button', { onclick: () => actions.isolatePart(ids) }, 'Show only these'),
+      ),
+      group('part-position', 'Position and rotation', [
+        h('p', { class: 'hint' }, 'The parts move and turn together, about their common middle.'),
+        moveToolRow(ids, placed, actions),
+      ]),
+    ],
+    footer: [deleteButton(`Delete ${parts.length} parts`, () => actions.deleteParts(ids))],
+  };
+}
+
+/** The switch for the move tool in the viewport and a button that puts parts back. */
+function moveToolRow(ids, placed, actions) {
+  const on = actions.isGizmoOn();
+  return [
+    h(
+      'div',
+      { class: 'button-row' },
+      h(
+        'button',
+        {
+          class: on ? 'active' : '',
+          onclick: actions.toggleGizmo,
+          title: `Arrows and squares move, rings turn, the ball moves freely. Shift snaps to 1 mm or 15° (${shortcutLabel('move')})`,
+        },
+        icon('move', 15),
+        on ? 'Hide move tool' : 'Move and rotate',
+      ),
+      h(
+        'button',
+        { onclick: () => actions.resetPartPlacement(ids), disabled: !placed, title: 'Back to the CAD position' },
+        icon('undo', 15),
+        'Reset',
+      ),
+    ),
+    on ? h('p', { class: 'hint' }, 'Drag a handle in the viewport. Afterwards, type the exact distance or angle and press Enter.') : null,
+  ];
 }
 
 function partPanel(part, { actions }) {
@@ -379,8 +490,6 @@ function partPanel(part, { actions }) {
       },
     }),
   );
-  const moving = actions.isGizmoOn(part.id, 'translate');
-  const turning = actions.isGizmoOn(part.id, 'rotate');
   const placed = state.partOffsets.has(part.id) || state.partRotations.has(part.id);
 
   const own = partExplode(state.explode, part.id);
@@ -423,38 +532,9 @@ function partPanel(part, { actions }) {
         h('div', { class: 'field-grid three' }, positionBoxes),
         caption('Turn around the part\'s centre'),
         h('div', { class: 'field-grid three' }, rotationBoxes),
-        h(
-          'div',
-          { class: 'button-row' },
-          h(
-            'button',
-            {
-              class: moving ? 'active' : '',
-              onclick: () => actions.toggleGizmo(part.id, 'translate'),
-              title: 'Drag the arrows in the viewport to move the part',
-            },
-            icon('move', 15),
-            'Move',
-          ),
-          h(
-            'button',
-            {
-              class: turning ? 'active' : '',
-              onclick: () => actions.toggleGizmo(part.id, 'rotate'),
-              title: 'Drag the rings in the viewport to turn the part',
-            },
-            icon('rotate', 15),
-            'Rotate',
-          ),
-          h(
-            'button',
-            { onclick: () => actions.resetPartPlacement(part.id), disabled: !placed, title: 'Back to the CAD position' },
-            icon('undo', 15),
-            'Reset',
-          ),
-        ),
+        moveToolRow([part.id], placed, actions),
       ]),
-      state.parts.length > 1
+      state.parts.length > 1 && hasExplode(state.explode)
         ? group(
             'part-explode',
             'Exploded view',
@@ -483,14 +563,15 @@ function partPanel(part, { actions }) {
                 onchange: () => emit('explode'),
               }),
               state.explode.amount === 0
-                ? h('p', { class: 'hint' }, 'Set how far the assembly is exploded under Geometry › Exploded view, or in a render job.')
+                ? h('p', { class: 'hint' }, 'Set how far the assembly is exploded under Geometry › Exploded view.')
                 : null,
             ],
             { open: false },
           )
         : null,
-      h('p', { class: 'hint' }, plural(part.triangles, 'triangle', 'triangles')),
+      h('p', { class: 'hint' }, `${plural(part.triangles, 'triangle', 'triangles')} · Ctrl or Shift + click selects several parts`),
     ],
+    footer: [deleteButton('Delete part', () => actions.deleteParts([part.id]))],
     live: () => {
       positionBoxes.forEach((box, i) => box.set(offset()[i]));
       rotationBoxes.forEach((box, i) => box.set(rotation()[i]));
@@ -500,9 +581,15 @@ function partPanel(part, { actions }) {
 
 // --- Sections -------------------------------------------------------------------
 
-/** How the cut faces of all sections look. */
-function capControls() {
+/** How the cut faces of all sections look: their colour and an optional hatching. */
+function capControls({ viewer }) {
   const cap = state.sectionCap;
+  const set = (key, live = false) => (value) => {
+    cap[key] = value;
+    emit(live ? 'sections:live' : 'sections');
+  };
+  const hatched = cap.hatch !== 'none';
+  const spacing = hatchSpacing(cap, viewer.modelBox);
   return [
     field(
       'Colour',
@@ -512,26 +599,33 @@ function capControls() {
           ['color', 'Own colour'],
         ],
         cap.mode,
-        (value) => {
-          cap.mode = value;
-          emit('sections');
-        },
+        set('mode'),
       ),
     ),
     cap.mode === 'color'
-      ? field(
-          'Own colour',
-          h('input', {
-            type: 'color',
-            value: cap.color,
-            oninput: (event) => {
-              cap.color = event.target.value;
-              emit('sections:live');
-            },
-          }),
-        )
+      ? field('Own colour', h('input', { type: 'color', value: cap.color, oninput: (event) => set('color', true)(event.target.value) }))
       : null,
-    h('p', { class: 'hint' }, 'Applies to all sections.'),
+    segmented('Hatching', Object.entries(HATCH_PATTERNS), cap.hatch, set('hatch')),
+    hatched
+      ? [
+          field('Line colour', h('input', { type: 'color', value: cap.hatchColor, oninput: (event) => set('hatchColor', true)(event.target.value) })),
+          h(
+            'div',
+            { class: 'field-grid two' },
+            numberBox('Spacing mm', {
+              value: spacing,
+              step: spacing >= 5 ? 1 : 0.1,
+              min: 0.05,
+              digits: 2,
+              title: cap.hatchSpacing > 0 ? 'Distance between the lines' : 'Distance between the lines, chosen from the size of the model',
+              onchange: (value) => set('hatchSpacing')(Math.max(value, 0.05)),
+            }),
+            numberBox('Angle °', { value: cap.hatchAngle, step: 15, digits: 1, onchange: (value) => set('hatchAngle')(((value % 180) + 180) % 180) }),
+          ),
+          toggle('Turn on every other part', cap.hatchAlternate, set('hatchAlternate'), 'Neighbouring parts get lines at right angles, as in a technical drawing'),
+        ]
+      : null,
+    h('p', { class: 'hint' }, 'Applies to all sections, in the viewport and in the rendering.'),
   ];
 }
 
@@ -639,7 +733,7 @@ function sectionPanel(section, { viewer, actions }) {
             ),
           ])
         : null,
-      group('section-caps', 'Cut faces', capControls(), { open: false }),
+      group('section-caps', 'Cut faces', capControls({ viewer }), { open: false }),
     ],
     footer: [
       deleteButton('Delete', () => actions.deleteSection(section.id)),
@@ -881,9 +975,26 @@ function scenePanel(which, { actions }) {
             h('button', { onclick: () => set('background')('light') }, 'Use a colour background'),
           ]
         : [
-            field('Shape', selectControl(Object.entries(FLOORS), scene.floor, set('floor'))),
+            field(
+              'Shape',
+              selectControl(
+                Object.entries(FLOORS).filter(([value]) => value !== 'none'),
+                scene.floor,
+                set('floor'),
+              ),
+            ),
             scene.floor === 'cove' ? colorField('Cove colour', 'coveColor') : null,
             scene.floor === 'shadow' ? h('p', { class: 'hint' }, 'The floor blends into the background and only shows shadows and reflections.') : null,
+            slider('Shadow', {
+              min: 0,
+              max: 100,
+              value: Math.round(scene.shadow * 100),
+              format: (value) => (value === 0 ? 'none' : percent(value)),
+              title: 'How dark the shadow under the model is. 100 % is the shadow the lights cast',
+              oninput: (value) => set('shadow', true)(value / 100),
+              onchange: () => emit('scene'),
+            }),
+            h('p', { class: 'hint' }, 'How soft the shadow is comes from the size of the lights.'),
             scene.floor !== 'none'
               ? group('scene-reflection', 'Reflections', [
                   slider('Reflection', {
@@ -908,6 +1019,7 @@ function scenePanel(which, { actions }) {
                 ])
               : null,
           ],
+      footer: [deleteButton('Remove', actions.deleteFloor)],
     };
   }
 
@@ -1176,15 +1288,6 @@ function viewsPanel({ viewer, actions }) {
     }),
   );
 
-  const focusText = h('p', { class: 'hint' });
-  const updateFocus = () => {
-    focusText.textContent = `Focus: ${camera.focusPoint ? 'chosen point' : 'pivot'} · ${numberFormat.format(
-      Math.round(actions.focusDistance()),
-    )} mm`;
-  };
-  updateFocus();
-  const picking = actions.isPickingFocus();
-
   return {
     title: 'Camera',
     icon: 'lens',
@@ -1211,60 +1314,13 @@ function viewsPanel({ viewer, actions }) {
         ],
         { open: false },
       ),
-      group(
-        'depth-of-field',
-        'Depth of field',
-        [
-          toggle(
-            'Use in the rendering',
-            camera.dof,
-            (checked) => {
-              camera.dof = checked;
-              emit('camera');
-            },
-            'The real-time view stays sharp',
+      camera.dof
+        ? null
+        : h(
+            'p',
+            { class: 'hint' },
+            'For a blurred background or foreground, add Depth of field with the + of the camera.',
           ),
-          camera.dof
-            ? [
-                slider('Aperture', {
-                  min: 0,
-                  max: F_STOPS.length - 1,
-                  value: Math.max(F_STOPS.indexOf(camera.fStop), 0),
-                  format: (value) => `f/${F_STOPS[value]}`,
-                  title: 'A small f-number means more blur',
-                  oninput: (value) => {
-                    camera.fStop = F_STOPS[value];
-                    emit('camera:live');
-                  },
-                }),
-                focusText,
-                h(
-                  'div',
-                  { class: 'button-row' },
-                  h(
-                    'button',
-                    { class: picking ? 'active' : '', onclick: actions.pickFocus },
-                    icon('target', 15),
-                    picking ? 'Click a point …' : 'Pick focus',
-                  ),
-                  camera.focusPoint
-                    ? h(
-                        'button',
-                        {
-                          onclick: () => {
-                            camera.focusPoint = null;
-                            emit('camera');
-                          },
-                        },
-                        'Reset',
-                      )
-                    : null,
-                ),
-              ]
-            : null,
-        ],
-        { open: camera.dof },
-      ),
     ],
     footer: [h('button', { onclick: actions.addView }, icon('bookmark', 15), 'Save view')],
     live: () => {
@@ -1273,8 +1329,59 @@ function viewsPanel({ viewer, actions }) {
       targetBoxes.forEach((box, i) => box.set(current.target[i]));
       const length = viewer.focalLength;
       focal.set(toSlider(clampFocal(length)), focalText(length));
-      updateFocus();
     },
+  };
+}
+
+/** Depth of field: how blurred things in front of and behind the focus are, in the rendering. */
+function depthOfFieldPanel({ actions }) {
+  const { camera } = state;
+  const focusText = h('p', { class: 'hint' });
+  const updateFocus = () => {
+    focusText.textContent = `Focus: ${camera.focusPoint ? 'chosen point' : 'pivot'} · ${numberFormat.format(
+      Math.round(actions.focusDistance()),
+    )} mm`;
+  };
+  updateFocus();
+  const picking = actions.isPickingFocus();
+  return {
+    title: 'Depth of field',
+    icon: 'target',
+    body: [
+      h('p', { class: 'hint' }, 'Shows in the rendering only; the viewport stays sharp.'),
+      slider('Aperture', {
+        min: 0,
+        max: F_STOPS.length - 1,
+        value: Math.max(F_STOPS.indexOf(camera.fStop), 0),
+        format: (value) => `f/${F_STOPS[value]}`,
+        title: 'A small f-number means more blur',
+        oninput: (value) => {
+          camera.fStop = F_STOPS[value];
+          emit('camera:live');
+        },
+        onchange: () => emit('camera'),
+      }),
+      focusText,
+      h(
+        'div',
+        { class: 'button-row' },
+        h('button', { class: picking ? 'active' : '', onclick: actions.pickFocus }, icon('target', 15), picking ? 'Click a point …' : 'Pick focus'),
+        camera.focusPoint
+          ? h(
+              'button',
+              {
+                onclick: () => {
+                  camera.focusPoint = null;
+                  emit('camera');
+                },
+              },
+              'Use the pivot',
+            )
+          : null,
+      ),
+    ],
+    footer: [deleteButton('Remove', actions.deleteDepthOfField)],
+    live: updateFocus,
   };
 }
 
@@ -1749,8 +1856,11 @@ export function renderPanel(container, context) {
 
   if (key === 'geometry') panel = geometryPanel(context);
   else if (state.parts.length === 0) panel = null;
-  else if (kind === 'part') panel = state.parts[id] ? partPanel(state.parts[id], context) : null;
-  else if (key === 'explode') panel = state.parts.length > 1 ? explodePanel(context) : null;
+  else if (kind === 'part') {
+    const selected = [...state.selectedParts].map((item) => state.parts[item]).filter((part) => part && !part.removed);
+    if (selected.length > 1) panel = partsSelectionPanel(selected, context);
+    else panel = state.parts[id] && !state.parts[id].removed ? partPanel(state.parts[id], context) : null;
+  } else if (key === 'explode') panel = state.parts.length > 1 && hasExplode(state.explode) ? explodePanel(context) : null;
   else if (kind === 'section') {
     const section = state.sections.find((item) => item.id === id);
     panel = section ? sectionPanel(section, context) : null;
@@ -1759,7 +1869,8 @@ export function renderPanel(container, context) {
     const entry = state.materials.find((item) => item.id === id);
     panel = entry ? materialPanel(entry, context) : null;
   } else if (key === 'scene:background') panel = scenePanel('background', context);
-  else if (key === 'scene:floor') panel = scenePanel('floor', context);
+  else if (key === 'scene:floor') panel = state.scene.floor !== 'none' ? scenePanel('floor', context) : null;
+  else if (key === 'camera:dof') panel = state.camera.dof ? depthOfFieldPanel(context) : null;
   else if (key === 'lighting') panel = lightingPanel(context);
   else if (kind === 'light') {
     const light = state.lighting.lights.find((item) => item.id === id);
@@ -1796,12 +1907,16 @@ export function renderPanel(container, context) {
     panel.icon ? h('span', { class: 'panel-icon' }, icon(panel.icon, 18)) : null,
     h('h2', { title: panel.title }, panel.title),
     panel.badge ? h('span', { class: 'panel-badge' }, panel.badge) : null,
-    editable
-      ? [
-          headerButton('check', 'Keep changes and close', actions.applyPanel, 'icon-button apply'),
-          headerButton('close', 'Discard changes made in this panel', actions.discardPanel, 'icon-button discard'),
-        ]
-      : headerButton('close', 'Close', actions.closePanel),
+    h(
+      'div',
+      { class: 'panel-header-actions' },
+      editable
+        ? [
+            headerButton('check', 'Keep changes and close', actions.applyPanel, 'icon-button apply'),
+            headerButton('close', 'Discard changes made in this panel', actions.discardPanel, 'icon-button discard'),
+          ]
+        : headerButton('close', 'Close', actions.closePanel),
+    ),
   );
   container.replaceChildren(header, body);
   if (footer.length > 0) container.append(h('footer', { class: 'panel-footer' }, footer));

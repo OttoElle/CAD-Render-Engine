@@ -22,6 +22,8 @@ export const defaultScene = () => ({
   coveColor: '#e4e6ea',
   reflection: 0,
   reflectionBlur: 0.1,
+  /** How dark the shadow on the floor is: 1 as the light casts it, 0 none. */
+  shadow: 1,
 });
 
 /** Floor shapes. */
@@ -56,7 +58,20 @@ export const defaultLighting = () => ({
   lights: withIds(presetLights(getLightPreset('studio-soft'))),
 });
 export const defaultCamera = () => ({ dof: false, fStop: 4, focusPoint: null });
-export const defaultSectionCap = () => ({ mode: 'material', color: '#d9534f' });
+/**
+ * How cut faces look. `hatch` is 'none', 'lines' or 'cross' (see HATCH_PATTERNS in hatch.js);
+ * `hatchSpacing` is the distance between lines in mm (0 = chosen from the model's size),
+ * `hatchAlternate` turns the lines by 90° on every other part, as in a technical drawing.
+ */
+export const defaultSectionCap = () => ({
+  mode: 'material',
+  color: '#d9534f',
+  hatch: 'none',
+  hatchColor: '#1f2328',
+  hatchSpacing: 0,
+  hatchAngle: 45,
+  hatchAlternate: true,
+});
 /**
  * Rendering device and the settings new render jobs start with. A job copies
  * these; afterwards it keeps its own.
@@ -114,7 +129,10 @@ export const state = {
   projects: [],
   templates: [],
   fileName: null,
+  /** Parts of the model; a part the user deleted stays in the list with `removed` set, so ids stay stable. */
   parts: [],
+  /** Ids of the parts whose panel is open; several when parts are picked with Ctrl or Shift. */
+  selectedParts: new Set(),
   /**
    * Section cuts: { id, name, axis (0 = X, 1 = Y, 2 = Z in CAD coordinates), position (mm),
    * flip, enabled, uncut:Set of part ids that stay whole }.
@@ -251,9 +269,13 @@ export function resetForModel(fileName, parts) {
   state.upAxis = '+Z';
   state.partOffsets = new Map();
   state.partRotations = new Map();
+  state.selectedParts = new Set();
   state.views = [];
   state.jobs = [];
 }
+
+/** The parts that were not deleted. */
+export const presentParts = () => state.parts.filter((part) => !part.removed);
 
 /** Empties everything that belongs to a project, before another one is loaded. */
 export function resetForProject(project) {

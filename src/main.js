@@ -39,7 +39,7 @@ import {
 } from './persistence.js';
 import { sectionToPlane } from './section.js';
 import { sceneGradient } from './backdrop.js';
-import { explodeOffsets, cloneExplode } from './explode.js';
+import { explodeOffsets, cloneExplode, defaultExplode } from './explode.js';
 import { adjustCss, adjustImage } from './adjust.js';
 import {
   FILE_FORMATS,
@@ -68,6 +68,7 @@ import {
   removeMaterial,
   materialEntryOf,
   setPartsAssigned,
+  presentParts,
   defaultAdjust,
   QUALITY,
   OUTPUT_ASPECTS,
@@ -117,8 +118,10 @@ let panelSnapshot = null;
 /** Taken right before an action creates something and opens it, so discarding removes it again. */
 let pendingSnapshot = null;
 /** Part whose move gizmo is shown, or null. */
-let gizmoPart = null;
-let gizmoMode = 'translate';
+/** Whether the move and rotate tool is on; it shows at the selected parts while their panel is open. */
+let gizmoOn = false;
+/** Where the selected parts were when the current drag of the tool started. */
+let gizmoBase = null;
 /** Whether the app settings are open. */
 let settingsOpen = false;
 const settingsEl = $('#settings');
@@ -169,14 +172,16 @@ function applySceneAndLighting() {
     coveColor: state.scene.coveColor,
     reflection: state.scene.reflection,
     reflectionBlur: state.scene.reflectionBlur,
+    shadow: state.scene.shadow,
   });
 }
 
 /** Puts the parts where the user moved and turned them, plus how far an exploded view moves them apart. */
 function applyExplode() {
-  const exploded = explodeOffsets(state.parts, state.explode, state.partOffsets);
+  const exploded = explodeOffsets(presentParts(), state.explode, state.partOffsets);
   viewer.setPartTransforms(state.partOffsets, state.partRotations, exploded);
-  if (gizmoPart !== null) viewer.placeGizmo(partCenter(gizmoPart));
+  const ids = gizmoParts();
+  if (ids.length > 0) viewer.placeGizmo(selectionCenter(ids));
 }
 
 /** Turns the model so that the chosen CAD axis points up. */
@@ -199,42 +204,152 @@ function roundAngle(degrees) {
   return Math.round(wrapped * 10) / 10 || 0;
 }
 
-/** Shows the gizmo for moving ('translate') or turning ('rotate') a part, or hides it (id null). */
-function setGizmoPart(id, mode = 'translate') {
-  gizmoPart = id;
-  gizmoMode = mode;
-  if (id === null) {
-    viewer.detachGizmo();
-    return;
-  }
-  let start = null;
-  const onMove = (delta) => {
-    if (delta === null) {
-      start = null;
-      emit('geometry');
-      return;
-    }
-    if (mode === 'rotate') {
-      start ??= new Quaternion().setFromEuler(
-        new Euler(...(state.partRotations.get(id) || [0, 0, 0]).map((value) => MathUtils.degToRad(value)), 'XYZ'),
-      );
-      // The turn is about the CAD axes, so it comes before the part's own rotation.
-      const turned = new Quaternion().fromArray(delta).multiply(start);
-      const angles = new Euler().setFromQuaternion(turned, 'XYZ').toArray().slice(0, 3);
-      const rounded = angles.map((value) => roundAngle(MathUtils.radToDeg(value)));
-      if (rounded.some((value) => value !== 0)) state.partRotations.set(id, rounded);
-      else state.partRotations.delete(id);
-    } else {
-      start ??= [...(state.partOffsets.get(id) || [0, 0, 0])];
-      state.partOffsets.set(
+/** The selected parts the move tool works on: those of an open part panel. */
+function gizmoParts() {
+  if (!gizmoOn || !state.selected.startsWith('part:')) return [];
+  return [...state.selectedParts].filter((id) => state.parts[id] && !state.parts[id].removed);
+}
+
+/** Middle of the given parts as they stand, in CAD coordinates. */
+function selectionCenter(ids) {
+  const sum = new Vector3();
+  for (const id of ids) sum.add(new Vector3().fromArray(partCenter(id)));
+  return sum.divideScalar(ids.length).toArray();
+}
+
+const roundMm = (value) => Math.round(value * 100) / 100 || 0;
+
+function setPlacement(id, offset, angles) {
+  if (offset.some((value) => value !== 0)) state.partOffsets.set(id, offset);
+  else state.partOffsets.delete(id);
+  if (angles.some((value) => value !== 0)) state.partRotations.set(id, angles);
+  else state.partRotations.delete(id);
+}
+
+/**
+ * The move tool's changes, applied to all selected parts from where they were
+ * when the drag started. Several parts turn together about their common middle.
+ */
+const gizmoCallbacks = {
+  start: () => {
+    const entries = gizmoParts().map((id) => {
+      const part = state.parts[id];
+      const offset = [...(state.partOffsets.get(id) || [0, 0, 0])];
+      const angles = state.partRotations.get(id) || [0, 0, 0];
+      const center = part.mesh.geometry.boundingBox.getCenter(new Vector3());
+      return {
         id,
-        start.map((value, i) => Math.round((value + delta[i]) * 100) / 100),
+        offset,
+        rotation: new Quaternion().setFromEuler(new Euler(...angles.map((value) => MathUtils.degToRad(value)), 'XYZ')),
+        center,
+        placed: center.clone().add(new Vector3().fromArray(offset)),
+      };
+    });
+    const pivot = new Vector3();
+    for (const entry of entries) pivot.add(entry.placed);
+    gizmoBase = { entries, pivot: pivot.divideScalar(Math.max(entries.length, 1)) };
+  },
+  change: (change) => {
+    if (!gizmoBase) return;
+    for (const entry of gizmoBase.entries) {
+      if (change.type === 'move') {
+        setPlacement(
+          entry.id,
+          entry.offset.map((value, i) => roundMm(value + change.delta[i])),
+          state.partRotations.get(entry.id) || [0, 0, 0],
+        );
+        continue;
+      }
+      const turn = new Quaternion().setFromAxisAngle(
+        new Vector3().setComponent(change.axis, 1),
+        MathUtils.degToRad(change.angle),
       );
+      const rotation = turn.clone().multiply(entry.rotation);
+      const angles = new Euler()
+        .setFromQuaternion(rotation, 'XYZ')
+        .toArray()
+        .slice(0, 3)
+        .map((value) => roundAngle(MathUtils.radToDeg(value)));
+      // The part's middle swings around the middle of the selection.
+      const placed = entry.placed.clone().sub(gizmoBase.pivot).applyQuaternion(turn).add(gizmoBase.pivot);
+      setPlacement(entry.id, placed.sub(entry.center).toArray().map(roundMm), angles);
     }
     applyExplode();
     panelLive?.();
-  };
-  viewer.attachGizmo(partCenter(id), onMove, mode);
+  },
+  end: () => emit('geometry'),
+};
+
+/** Shows the move tool at the selected parts, or hides it. */
+function updateGizmo() {
+  const ids = gizmoParts();
+  if (ids.length === 0) {
+    if (viewer.manipulator.attached) viewer.detachGizmo();
+    return;
+  }
+  if (viewer.manipulator.attached) viewer.placeGizmo(selectionCenter(ids));
+  else viewer.attachGizmo(selectionCenter(ids), gizmoCallbacks);
+}
+
+/**
+ * Opens a part, or with `additive` (Ctrl, Cmd or Shift held) adds it to the
+ * open selection or takes it out again.
+ */
+function selectPart(id, additive = false) {
+  if (!additive || !state.selected.startsWith('part:')) {
+    state.selectedParts = new Set([id]);
+    select(`part:${id}`);
+    return;
+  }
+  const next = new Set(state.selectedParts);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  if (next.size === 0) {
+    select('');
+    return;
+  }
+  state.selectedParts = next;
+  const current = Number(state.selected.split(':')[1]);
+  select(`part:${next.has(current) ? current : [...next][0]}`);
+}
+
+/** Takes parts out of the model. They can be brought back from the Parts menu in the tree. */
+function deleteParts(ids) {
+  const list = ids.filter((id) => state.parts[id] && !state.parts[id].removed);
+  if (list.length === 0) return;
+  for (const id of list) {
+    state.parts[id].removed = true;
+    viewer.setPartVisible(id, false);
+    if (state.explode.anchor === id) state.explode.anchor = null;
+  }
+  if (state.selected.startsWith('part:') && list.some((id) => state.selectedParts.has(id))) {
+    panelSnapshot = null;
+    state.selectedParts = new Set();
+    select('');
+  }
+  emit('geometry');
+  setStatus(
+    `${list.length === 1 ? state.parts[list[0]].label : `${list.length} parts`} deleted. Geometry › Parts › ⋯ brings ${list.length === 1 ? 'it' : 'them'} back.`,
+    { timeout: 5000 },
+  );
+}
+
+function restoreParts() {
+  for (const part of state.parts) {
+    if (!part.removed) continue;
+    part.removed = false;
+    viewer.setPartVisible(part.id, true);
+  }
+  emit('geometry');
+}
+
+/** Marks parts as deleted after a project was loaded. */
+function applyRemoved(ids) {
+  for (const part of state.parts) part.removed = false;
+  for (const id of ids) {
+    state.parts[id].removed = true;
+    viewer.setPartVisible(id, false);
+  }
 }
 
 /** Shows a saved view or a render job's camera, including how far the assembly was exploded. */
@@ -269,14 +384,18 @@ function sectionFacesCamera(axis) {
   return cameraDirectionCad()[axis] > 0;
 }
 
-/** Adds a cut through the middle of the model that opens it up towards the camera. */
-function addSection() {
+/**
+ * Adds a cut through the middle of the model that opens it up towards the
+ * camera, across the given axis or the horizontal one the camera looks along most.
+ */
+function addSection(chosenAxis = null) {
   if (state.parts.length === 0) return;
-  // Pick the horizontal axis the camera looks along most.
   const cad = cameraDirectionCad();
   const up = viewer.toCad(new Vector3(0, 1, 0)).toArray().map(Math.abs);
   const candidates = [0, 1, 2].filter((i) => up[i] < 0.5);
-  const axis = candidates.reduce((best, i) => (Math.abs(cad[i]) > Math.abs(cad[best]) ? i : best), candidates[0]);
+  const axis = [0, 1, 2].includes(chosenAxis)
+    ? chosenAxis
+    : candidates.reduce((best, i) => (Math.abs(cad[i]) > Math.abs(cad[best]) ? i : best), candidates[0]);
   const center = viewer.modelBox.getCenter(new Vector3());
   pendingSnapshot = snapshotProject();
   const section = {
@@ -560,6 +679,7 @@ async function runRender(render) {
           coveColor: state.scene.coveColor,
           reflection: state.scene.reflection,
           reflectionBlur: state.scene.reflectionBlur,
+          shadow: state.scene.shadow,
         },
         // Right before the scene is read: show the camera and explosion this rendering was queued with.
         prepare: () => {
@@ -978,12 +1098,13 @@ async function loadModel(file, { record, store }) {
     const parts = await loadStepFile(file);
     if (token !== projectToken) return;
 
-    setGizmoPart(null);
+    viewer.detachGizmo();
     viewer.setParts(parts);
     resetForModel(file.name, parts);
     const restored = applyModelData(record);
     if (restored) {
       for (const id of restored.hidden) viewer.setPartVisible(id, false);
+      applyRemoved(restored.removed);
       if (restored.view) viewer.applyViewState(restored.view);
     } else {
       // A focus point belongs to the model it was picked on.
@@ -1019,7 +1140,7 @@ async function openProject(record) {
   loading = false;
   resetForProject(record);
   setPendingPalette(null);
-  setGizmoPart(null);
+  viewer.detachGizmo();
   panelSnapshot = null;
   viewer.setCustomEnvironment(null);
   viewer.setFov(35);
@@ -1240,7 +1361,7 @@ async function finishImport(data, replace) {
 
 function selectionHighlight() {
   const [kind, idText] = state.selected.split(':');
-  return kind === 'part' ? [Number(idText)] : clickHighlight;
+  return kind === 'part' ? [...state.selectedParts] : clickHighlight;
 }
 
 /** Panels where clicking a part in the viewport does something, so parts light up under the pointer. */
@@ -1265,13 +1386,14 @@ function discardPanel() {
     return;
   }
   const { key, data } = snapshot;
-  setGizmoPart(null);
+  viewer.detachGizmo();
   applySettings(data);
   if (state.parts.length > 0 && data.fileName) {
     const restored = applyModelData({ ...data, fileName: state.fileName, partCount: state.parts.length });
     if (restored) {
       const hidden = new Set(restored.hidden);
       for (const part of state.parts) viewer.setPartVisible(part.id, !hidden.has(part.id));
+      applyRemoved(restored.removed);
       // Only the camera panel takes the camera back; elsewhere it was moved just to look.
       if (key === 'views' && restored.view) viewer.applyViewState(restored.view);
     }
@@ -1391,16 +1513,53 @@ const actions = {
   },
   addSection,
   sectionFacesCamera,
+  addExplode: () => {
+    if (state.parts.length < 2) return;
+    pendingSnapshot = snapshotProject();
+    state.explode.added = true;
+    if (!(state.explode.amount > 0)) state.explode.amount = 0.5;
+    select('explode');
+    emit('explode');
+  },
+  deleteExplode: () =>
+    deleteFromTree('explode', 'explode', () => {
+      state.explode = defaultExplode();
+    }),
+  addFloor: (floor) => {
+    pendingSnapshot = snapshotProject();
+    state.scene.floor = floor;
+    if (state.scene.background === 'environment') state.scene.background = 'light';
+    select('scene:floor');
+    emit('scene');
+  },
+  deleteFloor: () =>
+    deleteFromTree('scene:floor', 'scene', () => {
+      state.scene.floor = 'none';
+    }),
+  addDepthOfField: () => {
+    pendingSnapshot = snapshotProject();
+    state.camera.dof = true;
+    select('camera:dof');
+    emit('camera');
+  },
+  deleteDepthOfField: () =>
+    deleteFromTree('camera:dof', 'camera', () => {
+      state.camera.dof = false;
+      if (pickingFocus) setPickingFocus(false);
+    }),
+  selectPart,
+  deleteParts,
+  restoreParts,
   toggleSection: (id) => {
     const section = state.sections.find((item) => item.id === id);
     if (!section) return;
     section.enabled = !section.enabled;
     emit('sections');
   },
-  addMaterial: () => {
+  addMaterial: (materialId) => {
     if (state.parts.length === 0) return;
     pendingSnapshot = snapshotProject();
-    const entry = addMaterial();
+    const entry = addMaterial(materialId);
     select(`material:${entry.id}`);
   },
   showView,
@@ -1432,12 +1591,18 @@ const actions = {
     viewer.setPartVisible(id, !state.parts[id].mesh.visible);
     emit('geometry');
   },
+  /** Hides or shows several parts at once: shows them if any is hidden. */
+  setPartsVisible: (ids, visible) => {
+    for (const id of ids) viewer.setPartVisible(id, visible);
+    emit('geometry');
+  },
   showAllParts: () => {
-    for (const part of state.parts) viewer.setPartVisible(part.id, true);
+    for (const part of presentParts()) viewer.setPartVisible(part.id, true);
     emit('geometry');
   },
   isolatePart: (id) => {
-    for (const part of state.parts) viewer.setPartVisible(part.id, part.id === id);
+    const keep = new Set(Array.isArray(id) ? id : [id]);
+    for (const part of presentParts()) viewer.setPartVisible(part.id, keep.has(part.id));
     emit('geometry');
   },
   setPartOffset: (id, offset) => {
@@ -1451,27 +1616,28 @@ const actions = {
     emit('geometry');
   },
   resetPartPlacement: (id) => {
-    state.partOffsets.delete(id);
-    state.partRotations.delete(id);
+    for (const item of Array.isArray(id) ? id : [id]) {
+      state.partOffsets.delete(item);
+      state.partRotations.delete(item);
+    }
     emit('geometry');
   },
-  toggleGizmo: (id, mode = 'translate') => {
-    setGizmoPart(gizmoPart === id && gizmoMode === mode ? null : id, mode);
-    emit('geometry:live');
-  },
-  isGizmoOn: (id, mode = 'translate') => gizmoPart === id && gizmoMode === mode,
+  toggleGizmo,
+  isGizmoOn: () => gizmoOn,
   axesVisible: () => viewer.axesHelper.visible,
   toggleAxes,
   guides: () => ({ ...guides }),
   setGuides,
   hover: (ids) => viewer.setHighlight(ids ?? selectionHighlight()),
   loadHdri: () => hdriInput.click(),
-  addLight: () => {
+  addLight: (kind = 'softbox') => {
+    const base = { softbox: 'Softbox', strip: 'Strip light', round: 'Round softbox' }[kind] || 'Softbox';
     const names = state.lighting.lights.map((light) => light.name);
-    let number = state.lighting.lights.length + 1;
-    while (names.includes(`Softbox ${number}`)) number += 1;
+    let number = 1;
+    while (names.includes(`${base} ${number}`)) number += 1;
     pendingSnapshot = snapshotProject();
-    const [light] = withIds([newLight(`Softbox ${number}`)]);
+    const shape = kind === 'strip' ? { width: 10, height: 50 } : kind === 'round' ? { round: true } : {};
+    const [light] = withIds([{ ...newLight(`${base} ${number}`), ...shape }]);
     state.lighting.lights.push(light);
     select(`light:${light.id}`);
   },
@@ -1534,10 +1700,11 @@ function refresh(what) {
     }
     pendingSnapshot = null;
     clickHighlight = [];
-    if (pickingFocus && state.selected !== 'views') setPickingFocus(false);
+    if (pickingFocus && state.selected !== 'camera:dof') setPickingFocus(false);
     if (pickingHighlight && state.selected !== `light:${pickingHighlight.id}`) setPickingHighlight(null);
-    if (gizmoPart !== null && state.selected !== `part:${gizmoPart}`) setGizmoPart(null);
     const [kind, idText] = state.selected.split(':');
+    if (kind !== 'part') state.selectedParts = new Set();
+    else if (!state.selectedParts.has(Number(idText))) state.selectedParts = new Set([Number(idText)]);
     if (kind === 'view') {
       const view = state.views.find((item) => item.id === Number(idText));
       if (view) showView(view);
@@ -1570,6 +1737,7 @@ function refresh(what) {
   updateOutputFrame();
   updateRenderView();
   updateFocusMarker();
+  updateGizmo();
   if (settingsOpen && !live) drawSettings();
 }
 
@@ -1583,7 +1751,7 @@ viewer.onViewChange = () => {
   // An open render job takes the camera along.
   const job = applyingRenderView ? null : selectedJob();
   if (job) job.camera = viewer.getViewState();
-  if (state.selected === 'views' || job) panelLive?.();
+  if (state.selected === 'views' || state.selected === 'camera:dof' || job) panelLive?.();
   scheduleSave();
 };
 
@@ -1591,7 +1759,7 @@ viewer.onPartHover = (partId) => {
   viewer.canvas.title = partId === null ? '' : state.parts[partId]?.label || '';
 };
 
-viewer.onPartClick = (partId, point, normal) => {
+viewer.onPartClick = (partId, point, normal, event) => {
   if (pickingHighlight) {
     if (!point) return;
     placeHighlight(pickingHighlight, point, normal);
@@ -1637,9 +1805,10 @@ viewer.onPartClick = (partId, point, normal) => {
   // Around the geometry step a click opens the part; elsewhere it only points it out,
   // so the panel being worked in stays open.
   const browsing = ['', 'geometry', 'part', 'explode'].includes(kind) || state.selected === 'material:cad';
+  const additive = Boolean(event && (event.ctrlKey || event.metaKey || event.shiftKey));
   if (browsing) {
-    if (partId !== null) select(`part:${partId}`);
-    else if (kind === 'part') select('');
+    if (partId !== null) selectPart(partId, additive);
+    else if (kind === 'part' && !additive) select('');
     return;
   }
   clickHighlight = partId === null ? [] : [partId];
@@ -1697,22 +1866,33 @@ hdriInput.addEventListener('change', () => {
   openHdri(file);
 });
 
-// Drag and drop anywhere on the window.
+// Drag and drop of files anywhere on the window. Only files count: dragging a
+// slider or selected text inside the app must not look like a file drop.
+const carriesFiles = (event) => Array.from(event.dataTransfer?.types || []).includes('Files');
 let dragDepth = 0;
+window.addEventListener('dragstart', (event) => {
+  // The app has nothing to drag; this stops text or images from being dragged off by accident.
+  if (!event.target.closest?.('[draggable="true"]')) event.preventDefault();
+});
 window.addEventListener('dragenter', (event) => {
+  if (!carriesFiles(event)) return;
   event.preventDefault();
   dragDepth += 1;
   dropzone.classList.add('dragover');
 });
-window.addEventListener('dragover', (event) => event.preventDefault());
-window.addEventListener('dragleave', () => {
+window.addEventListener('dragover', (event) => {
+  if (carriesFiles(event)) event.preventDefault();
+});
+window.addEventListener('dragleave', (event) => {
+  if (!carriesFiles(event)) return;
   dragDepth = Math.max(dragDepth - 1, 0);
   if (dragDepth === 0) dropzone.classList.remove('dragover');
 });
 window.addEventListener('drop', (event) => {
-  event.preventDefault();
   dragDepth = 0;
   dropzone.classList.remove('dragover');
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
   const file = event.dataTransfer?.files?.[0];
   // Dropping an HDRI sets it as lighting, a project file imports the project.
   if (file && /\.(hdr|exr)$/i.test(file.name)) openHdri(file);
@@ -1749,6 +1929,12 @@ function setGuides(changes) {
   if (state.selected === 'views' || state.selected.startsWith('job:')) emit('selection');
 }
 guidesBtn.addEventListener('click', () => setGuides({ visible: !guides.visible }));
+
+function toggleGizmo() {
+  gizmoOn = !gizmoOn;
+  updateGizmo();
+  emit('geometry:live');
+}
 
 /** Tooltips of the toolbar name the current keys. */
 function updateShortcutTitles() {
@@ -1801,6 +1987,7 @@ window.addEventListener('keydown', (event) => {
   if (shortcut === 'edges') toggleEdges();
   if (shortcut === 'axes') toggleAxes();
   if (shortcut === 'guides') setGuides({ visible: !guides.visible });
+  if (shortcut === 'move' && state.selected.startsWith('part:')) toggleGizmo();
   if (event.key === 'Escape') {
     if (pickingFocus) actions.pickFocus();
     if (pickingHighlight) actions.pickHighlight(pickingHighlight);

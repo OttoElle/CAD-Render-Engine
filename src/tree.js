@@ -1,9 +1,11 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { openMenu } from './menu.js';
-import { state, select, materialEntryLabel, BACKGROUND_COLORS } from './state.js';
+import { state, select, materialEntryLabel, presentParts, BACKGROUND_COLORS } from './state.js';
 import { getLightPreset } from './environment.js';
 import { FILE_FORMATS } from './export.js';
+import { hasExplode } from './explode.js';
+import { MATERIALS, MATERIAL_GROUPS } from './materials.js';
 
 /** Keys of nodes whose children are folded away. */
 const collapsed = new Set();
@@ -31,8 +33,12 @@ function backgroundName(scene) {
  */
 export function renderTree(container, actions) {
   const loaded = state.parts.length > 0;
-  const unassigned = state.parts.filter((part) => !state.materials.some((entry) => entry.partIds.has(part.id))).length;
-  const hiddenParts = state.parts.filter((part) => !part.mesh.visible).length;
+  const parts = presentParts();
+  const removedParts = state.parts.length - parts.length;
+  const unassigned = parts.filter((part) => !state.materials.some((entry) => entry.partIds.has(part.id))).length;
+  const assignedCount = (entry) => parts.filter((part) => entry.partIds.has(part.id)).length;
+  const hiddenParts = parts.filter((part) => !part.mesh.visible).length;
+  const additive = (event) => Boolean(event.ctrlKey || event.metaKey || event.shiftKey);
   const doneRenders = state.renders.filter((render) => render.status === 'done').length;
   const queued = state.renders.filter((render) => render.status === 'queued').length;
 
@@ -44,6 +50,8 @@ export function renderTree(container, actions) {
   });
   const more = (items) => ({ icon: 'more', title: 'More', menu: items });
   const remove = (label, run) => ({ label, icon: 'trash', danger: true, run });
+  /** The + of a category: a menu of what can be added there. */
+  const addMenu = (title, items) => ({ icon: 'plus', title, add: true, menu: items });
 
   const renderDetail = (render) =>
     render.status === 'running'
@@ -65,7 +73,24 @@ export function renderTree(container, actions) {
       icon: 'cube',
       actions: [
         loaded
-          ? { icon: 'plus', title: 'Add section', run: actions.addSection, add: true }
+          ? addMenu('Add to the geometry', () => [
+              {
+                label: 'Section plane',
+                icon: 'slice',
+                items: [
+                  { label: 'Facing the camera', run: () => actions.addSection() },
+                  null,
+                  ...['X', 'Y', 'Z'].map((axis, i) => ({ label: `Across ${axis}`, run: () => actions.addSection(i) })),
+                ],
+              },
+              {
+                label: 'Exploded view',
+                icon: 'explode',
+                disabled: parts.length < 2 || hasExplode(state.explode),
+                hint: hasExplode(state.explode) ? 'Already added' : parts.length < 2 ? 'Needs an assembly of several parts' : null,
+                run: actions.addExplode,
+              },
+            ])
           : { icon: 'plus', title: 'Open STEP file', run: actions.openFile, add: true },
       ],
       children: [
@@ -84,24 +109,36 @@ export function renderTree(container, actions) {
                 group: true,
                 label: 'Parts',
                 icon: 'partGroup',
-                detail: hiddenParts > 0 ? `${hiddenParts} of ${state.parts.length} hidden` : String(state.parts.length),
-                actions: hiddenParts > 0 ? [{ icon: 'eyeOff', title: 'Show all parts', sticky: true, run: actions.showAllParts }] : [],
-                children: state.parts.map((part) => ({
+                detail: hiddenParts > 0 ? `${hiddenParts} of ${parts.length} hidden` : String(parts.length),
+                actions: [
+                  hiddenParts > 0 ? { icon: 'eyeOff', title: 'Show all parts', sticky: true, run: actions.showAllParts } : null,
+                  removedParts > 0
+                    ? more([{ label: `Bring back deleted parts (${removedParts})`, icon: 'undo', run: actions.restoreParts }])
+                    : null,
+                ],
+                children: parts.map((part) => ({
                   key: `part:${part.id}`,
                   label: part.label,
                   swatch: part.colorHex,
                   dimmed: !part.mesh.visible,
                   hover: [part.id],
-                  actions: [eye(part.mesh.visible, ['Hide', 'Show'], () => actions.togglePart(part.id))],
+                  alsoSelected: state.selectedParts.has(part.id),
+                  pick: (event) => actions.selectPart(part.id, additive(event)),
+                  title: `${part.label} · Ctrl or Shift + click to select several`,
+                  actions: [
+                    eye(part.mesh.visible, ['Hide', 'Show'], () => actions.togglePart(part.id)),
+                    more([remove('Delete part', () => actions.deleteParts([part.id]))]),
+                  ],
                 })),
               },
-              state.parts.length > 1
+              parts.length > 1 && hasExplode(state.explode)
                 ? {
                     key: 'explode',
                     label: 'Exploded view',
                     icon: 'explode',
-                    detail: state.explode.amount > 0 ? `${Math.round(state.explode.amount * 100)} %` : 'off',
+                    detail: state.explode.amount > 0 ? `${Math.round(state.explode.amount * 100)} %` : 'assembled',
                     muted: !(state.explode.amount > 0),
+                    actions: [more([remove('Remove exploded view', actions.deleteExplode)])],
                   }
                 : null,
               ...state.sections.map((section) => ({
@@ -124,7 +161,18 @@ export function renderTree(container, actions) {
       category: true,
       label: 'Materials',
       icon: 'palette',
-      actions: [{ icon: 'plus', title: 'Add material', run: actions.addMaterial, add: true }],
+      actions: [
+        addMenu('Add material', () =>
+          Object.entries(MATERIAL_GROUPS).map(([groupId, label]) => ({
+            label,
+            items: MATERIALS.filter((item) => item.group === groupId).map((item) => ({
+              label: item.label,
+              swatch: item.color,
+              run: () => actions.addMaterial(item.id),
+            })),
+          })),
+        ),
+      ],
       children: [
         {
           key: 'material:cad',
@@ -138,8 +186,8 @@ export function renderTree(container, actions) {
           label: materialEntryLabel(entry),
           swatch: entry.colorHex,
           round: true,
-          detail: entry.partIds.size > 0 ? plural(entry.partIds.size, 'part', 'parts') : null,
-          warning: entry.partIds.size === 0 ? 'No parts assigned yet' : null,
+          detail: assignedCount(entry) > 0 ? plural(assignedCount(entry), 'part', 'parts') : null,
+          warning: assignedCount(entry) === 0 ? 'No parts assigned yet' : null,
           hover: [...entry.partIds],
           actions: [more([remove('Delete material', () => actions.deleteMaterial(entry.id))])],
         })),
@@ -150,15 +198,29 @@ export function renderTree(container, actions) {
       category: true,
       label: 'Scene',
       icon: 'scene',
+      actions: [
+        addMenu('Add to the scene', () =>
+          ['shadow', 'cove'].map((floor) => ({
+            label: floor === 'shadow' ? 'Flat floor' : 'Cove (curves up behind the model)',
+            icon: 'floor',
+            disabled: state.scene.floor !== 'none',
+            hint: state.scene.floor !== 'none' ? 'The scene has a floor already' : null,
+            run: () => actions.addFloor(floor),
+          })),
+        ),
+      ],
       children: [
         { key: 'scene:background', label: 'Background', icon: 'background', detail: backgroundName(state.scene) },
-        {
-          key: 'scene:floor',
-          label: 'Floor',
-          icon: 'floor',
-          detail: state.scene.background === 'environment' ? 'from the scene' : FLOOR_NAMES[state.scene.floor],
-          muted: state.scene.background === 'environment',
-        },
+        state.scene.floor !== 'none'
+          ? {
+              key: 'scene:floor',
+              label: 'Floor',
+              icon: 'floor',
+              detail: state.scene.background === 'environment' ? 'from the scene' : FLOOR_NAMES[state.scene.floor],
+              muted: state.scene.background === 'environment',
+              actions: [more([remove('Remove floor', actions.deleteFloor)])],
+            }
+          : null,
       ],
     },
     {
@@ -166,7 +228,15 @@ export function renderTree(container, actions) {
       category: true,
       label: 'Lighting',
       icon: 'lamp',
-      actions: [{ icon: 'plus', title: 'Add softbox', run: actions.addLight, add: true }],
+      actions: [
+        addMenu('Add light', () => [
+          { label: 'Softbox', icon: 'softbox', run: () => actions.addLight('softbox') },
+          { label: 'Strip light', icon: 'softbox', run: () => actions.addLight('strip') },
+          { label: 'Round softbox', icon: 'softbox', run: () => actions.addLight('round') },
+          null,
+          { label: 'HDRI file …', icon: 'upload', run: actions.loadHdri },
+        ]),
+      ],
       children: [
         {
           key: 'lighting',
@@ -192,9 +262,29 @@ export function renderTree(container, actions) {
       category: true,
       label: 'Camera',
       icon: 'camera',
-      actions: [{ icon: 'plus', title: 'Save the current view', run: actions.addView, add: true }],
+      actions: [
+        addMenu('Add to the camera', () => [
+          { label: 'Saved view (as it is now)', icon: 'bookmark', run: actions.addView },
+          {
+            label: 'Depth of field',
+            icon: 'target',
+            disabled: state.camera.dof,
+            hint: state.camera.dof ? 'Already added' : null,
+            run: actions.addDepthOfField,
+          },
+        ]),
+      ],
       children: [
         { key: 'views', label: 'Lens', icon: 'lens', detail: actions.lensText() },
+        state.camera.dof
+          ? {
+              key: 'camera:dof',
+              label: 'Depth of field',
+              icon: 'target',
+              detail: `f/${state.camera.fStop}`,
+              actions: [more([remove('Remove depth of field', actions.deleteDepthOfField)])],
+            }
+          : null,
         ...state.views.map((view) => ({
           key: `view:${view.id}`,
           label: view.name,
@@ -310,9 +400,10 @@ export function renderTree(container, actions) {
       setCollapsed(node.key, !folded);
       renderTree(container, actions);
     };
-    const activate = () => {
+    const activate = (event) => {
       if (!enabled) return;
       if (foldable) toggleFold();
+      else if (node.pick) node.pick(event);
       else select(node.key);
     };
     const statusIcon = node.progress !== null && node.progress !== undefined
@@ -326,7 +417,7 @@ export function renderTree(container, actions) {
         class: [
           'node',
           node.category ? 'category' : `depth-${depth}`,
-          state.selected === node.key ? 'selected' : '',
+          state.selected === node.key || node.alsoSelected ? 'selected' : '',
           enabled ? '' : 'disabled',
           node.muted ? 'muted' : '',
           node.dimmed ? 'dimmed' : '',
@@ -334,13 +425,13 @@ export function renderTree(container, actions) {
         role: foldable ? 'treeitem' : 'button',
         'aria-expanded': foldable ? String(!folded) : null,
         tabIndex: enabled ? 0 : -1,
-        title: node.warning || (node.detail ? `${node.label} · ${node.detail}` : node.label),
+        title: node.warning || node.title || (node.detail ? `${node.label} · ${node.detail}` : node.label),
         onclick: activate,
         onmouseenter: node.hover ? () => actions.hover(node.hover) : null,
         onkeydown: (event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            activate();
+            activate(event);
           }
         },
       },

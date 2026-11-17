@@ -39,6 +39,11 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
   keine Häkchen, Schnellaktionen an den Einträgen), einheitlicher Baukasten
   für alle Panels mit Beschriftung links, Icon-Set, Einstellungen mit
   Rendering-Gerät und änderbaren Tastenkürzeln
+- [x] **Schritt 17:** Plus-Menüs zum Hinzufügen und Entfernen (Explosionsansicht,
+  Boden, Tiefenunschärfe, Lichtarten, Materialien nach Gruppen), Bauteile
+  löschen und mehrere zusammen auswählen, kombiniertes Werkzeug zum
+  Verschieben und Drehen mit Werteingabe im Viewport, Schraffur auf
+  Schnittflächen, einstellbarer Bodenschatten
 
 ## Ablauf
 
@@ -61,7 +66,11 @@ App in der Übersicht.
 
 Die schwebende Seitenleiste zeigt das Projekt als Baum. Die Kategorien
 (Geometry, Materials, Scene, Lighting, Camera, Output, Renders) sind nur
-Überschriften: ein Klick klappt sie auf und zu, das Plus legt etwas an, ein
+Überschriften: ein Klick klappt sie auf und zu, das Plus öffnet ein Menü mit
+allem, was sich dort hinzufügen lässt (mit Untermenüs, z. B. Materialien nach
+Gruppen). Angelegt ist nur, was jedes Projekt braucht (Hintergrund,
+Lichtvorlage, Objektiv, CAD-Farben); alles andere kommt über das Plus dazu und
+lässt sich über „⋯“ oder „Remove“ unten im Panel wieder entfernen. Ein
 Play-Symbol bei Output rendert alle Jobs, das Download-Symbol bei Renders
 speichert alle Bilder. Ein Klick auf einen Eintrag öffnet seine Einstellungen
 daneben. Beim Überfahren zeigen Einträge ihre Schnellaktionen: Auge zum Ein-
@@ -79,20 +88,35 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
 
 1. **Geometrie (Geometry):** STEP-Datei öffnen (Eintrag ganz oben oder
    Drag-and-drop); dieser Eintrag enthält auch Hochachse und Achsen. Darunter
-   stehen die Bauteile (Parts), die Explosionsansicht (Exploded view: Abstand,
-   Richtung und ein Bauteil als Zentrum) und die Schnitte; das Plus legt einen
-   Schnitt an. Bauteile lassen sich im Baum oder direkt im Modell anklicken; unter dem Mauszeiger
-   leuchten sie auf. Im Bauteil-Panel stehen Sichtbarkeit, Material,
-   Position und Drehung („Position and rotation“: Versatz in X, Y, Z und
-   Winkel um die CAD-Achsen, gedreht um die Mitte des Bauteils; mit „Move“
-   und „Rotate“ auch per Pfeilen und Ringen im Viewport) und eigene
-   Einstellungen für die Explosionsansicht. Schnitte gehen durch die
+   stehen die Bauteile (Parts) und, wenn hinzugefügt, die Explosionsansicht
+   (Exploded view: Abstand, Richtung und ein Bauteil als Zentrum) und die
+   Schnitte; das Plus fügt einen Schnitt (zur Kamera hin oder quer zu X, Y, Z)
+   oder die Explosionsansicht hinzu. Bauteile lassen sich im Baum oder direkt
+   im Modell anklicken; unter dem Mauszeiger leuchten sie auf. Mit Strg oder
+   Shift gedrückt kommen weitere Bauteile zur Auswahl dazu oder fallen wieder
+   heraus; das Panel gilt dann für alle zusammen (Material, Ein- und
+   Ausblenden, gemeinsam verschieben und drehen, löschen). Gelöschte Bauteile
+   holt „⋯“ an „Parts“ oder der Hinweis im Geometry-Panel zurück. Im
+   Bauteil-Panel stehen Sichtbarkeit, Material, Position und Drehung
+   („Position and rotation“: Versatz in X, Y, Z und Winkel um die CAD-Achsen,
+   gedreht um die Mitte des Bauteils) und eigene Einstellungen für die
+   Explosionsansicht. „Move and rotate“ (oder `M`) zeigt im Viewport ein
+   Werkzeug wie in CAD-Programmen: Pfeile verschieben entlang einer Achse,
+   Quadrate in einer Ebene, die Viertelringe drehen um eine Achse, die Kugel in
+   der Mitte verschiebt frei. Beim Ziehen steht der Wert neben dem Mauszeiger;
+   danach lässt sich der genaue Abstand oder Winkel eintippen und mit Enter
+   übernehmen. Shift rastet auf 1 mm bzw. 15° ein. Mehrere Bauteile drehen sich
+   um ihre gemeinsame Mitte. Schnitte gehen durch die
    Baugruppe, wie sie ausgerichtet ist; verschobene und gedrehte Bauteile
    werden in derselben Ebene geschnitten wie alle anderen. Ein Schnitt liegt senkrecht zu einer Achse und ist per Regler verschiebbar.
    Die Schnittflächen werden geschlossen, im Material des Bauteils oder in
-   eigener Farbe. Ein Klick auf ein Bauteil im Modell
+   eigener Farbe, auf Wunsch schraffiert (Linien oder gekreuzt, mit
+   Linienfarbe, Abstand in mm und Winkel; benachbarte Bauteile bekommen
+   abwechselnd um 90° gedrehte Linien wie in einer technischen Zeichnung). Die
+   Schraffur erscheint auch im Rendering. Ein Klick auf ein Bauteil im Modell
    nimmt es vom Schnitt aus oder schneidet es wieder.
-2. **Materialien (Materials):** Das Plus legt ein Material an. Bauteile
+2. **Materialien (Materials):** Das Plus legt ein Material aus der Bibliothek
+   an (Metall, Kunststoff, Lack und Beschichtung, Glas und Sonstiges). Bauteile
    werden im Modell angeklickt oder in der Liste angehakt; die zugewiesenen
    stehen als Auswahl-Box mit Entfernen-Knopf da, „Clear list“ leert sie.
    Gleiche Bauteile werden auf Wunsch gemeinsam zugewiesen. Regler für
@@ -101,15 +125,20 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
    jederzeit auf die Werte der Bibliothek zurück.
 3. **Szene (Scene):** „Background“: Farbe (hell, weiß, grau, dunkel, eigene
    Farbe oder Farbverlauf) oder Szene (die Lichtumgebung bzw. eine HDRI als
-   Hintergrund). „Floor“: Bodenform (flacher Boden, Hohlkehle oder kein
-   Boden) sowie Stärke und Unschärfe der Spiegelung.
+   Hintergrund). „Floor“ (über das Plus hinzuzufügen und wieder zu entfernen):
+   Bodenform (flacher Boden oder Hohlkehle), Stärke des Schattens sowie Stärke
+   und Unschärfe der Spiegelung. Wie weich der Schatten ist, bestimmen die
+   Größen der Lichter.
 4. **Beleuchtung (Lighting):** „Light setup“: Lichtvorlage oder eigene
-   HDRI-Datei, Drehung und Belichtung in Blendenstufen. Die Softboxen stehen als Einträge
+   HDRI-Datei, Drehung und Belichtung in Blendenstufen. Das Plus fügt eine
+   Softbox, ein Streiflicht (schmal und hoch) oder eine runde Softbox hinzu oder
+   lädt eine HDRI-Datei. Die Softboxen stehen als Einträge
    darunter und lassen sich einzeln verschieben, vergrößern, färben, dimmen
    und ausschalten. „Place highlight“ legt das Glanzlicht einer Softbox auf
    den angeklickten Punkt.
-5. **Kamera (Camera):** „Lens“: Brennweite oder Parallelprojektion, Kamera in
-   Zahlen und Tiefenunschärfe. Das Plus speichert die aktuelle Ansicht.
+5. **Kamera (Camera):** „Lens“: Brennweite oder Parallelprojektion und Kamera
+   in Zahlen. Das Plus speichert die aktuelle Ansicht oder fügt die
+   Tiefenunschärfe (Depth of field: Blende und Fokuspunkt) hinzu.
 6. **Output:** Hier entstehen Render-Jobs. Ein Job ist ein Bild oder ein
    Drehteller und merkt sich Kamera, Explosionsabstand, Seitenverhältnis,
    Auflösung, Qualität, Dateiformat und Transparenz. Solange ein Job offen
@@ -179,8 +208,10 @@ Testmodell liegt unter `samples/Bracket.step`.
 | Kanten ein- und ausblenden | `E` |
 | Koordinatensystem ein- und ausblenden | `A` |
 | Hilfslinien ein- und ausblenden | `G` |
+| Werkzeug zum Verschieben und Drehen der gewählten Bauteile | `M` |
+| Weitere Bauteile auswählen | Strg oder Shift + Klick |
 
-Die vier Tastenkürzel lassen sich unter dem Zahnrad oben rechts ändern.
+Die fünf Tastenkürzel lassen sich unter dem Zahnrad oben rechts ändern.
 
 ## Aufbau
 
@@ -190,9 +221,11 @@ Die vier Tastenkürzel lassen sich unter dem Zahnrad oben rechts ändern.
 - `src/step-loader.js` wandelt das Ergebnis in three.js-Geometrie um, ein Mesh
   pro Bauteil.
 - `src/viewer.js` ist die Echtzeit-Ansicht (WebGL) mit Kamera, Boden,
-  Bildausschnitt, Achsen und Verschiebe-Pfeilen, `src/cad-controls.js` die
+  Bildausschnitt und Achsen, `src/cad-controls.js` die
   Maussteuerung, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.
-- `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen.
+- `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen,
+  `src/hatch.js` schraffiert sie.
+- `src/manipulator.js` ist das Werkzeug zum Verschieben und Drehen im Viewport.
 - `src/backdrop.js` baut Boden, Hohlkehle und Farbverläufe für Ansicht und Rendering.
 - `src/explode.js` berechnet die Verschiebungen der Explosionsansicht.
 - `src/adjust.js` enthält die Bildbearbeitung für fertige Renderings,

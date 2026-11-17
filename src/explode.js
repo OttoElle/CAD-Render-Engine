@@ -21,13 +21,17 @@ export const PART_EXPLODE_DIRECTIONS = {
 };
 
 /**
- * `amount` 0 is assembled, 1 doubles all distances from the centre.
+ * `added` is set once the user adds the exploded view to the tree. `amount` 0 is
+ * assembled, 1 doubles all distances from the centre.
  * `direction` is one of EXPLODE_DIRECTIONS. `anchor` is the id of a part that
  * stays in place and serves as the centre, or null for the middle of the
  * assembly. `parts` holds settings of single parts by id:
  * { fixed (stays in place), direction (see PART_EXPLODE_DIRECTIONS), factor (1 = like the others) }.
  */
-export const defaultExplode = () => ({ amount: 0, direction: 'radial', anchor: null, parts: {} });
+export const defaultExplode = () => ({ added: false, amount: 0, direction: 'radial', anchor: null, parts: {} });
+
+/** Whether the exploded view is part of the project: added by the user, or set by a view or job. */
+export const hasExplode = (explode) => Boolean(explode.added || explode.amount > 0);
 
 export const defaultPartExplode = () => ({ fixed: false, direction: 'auto', factor: 1 });
 
