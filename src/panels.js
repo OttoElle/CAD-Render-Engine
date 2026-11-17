@@ -5,6 +5,7 @@ import {
   emit,
   select,
   withIds,
+  FLOORS,
   QUALITY,
   OUTPUT_SIZES,
   RENDER_DEVICES,
@@ -671,7 +672,16 @@ function materialPanel(entry, { actions }) {
 }
 
 function scenePanel() {
-  const isCustom = state.scene.background.startsWith('#');
+  const { scene } = state;
+  const isCustom = scene.background.startsWith('#');
+  const environment = scene.background === 'environment';
+  const set = (key, live = false) => (value) => {
+    scene[key] = value;
+    emit(live ? 'scene:live' : 'scene');
+  };
+  const colorField = (label, key) =>
+    field(label, h('input', { type: 'color', value: scene[key], oninput: (event) => set(key, true)(event.target.value) }));
+
   return {
     title: 'Szene',
     body: [
@@ -684,13 +694,11 @@ function scenePanel() {
             ['grey', 'Grau'],
             ['dark', 'Dunkel'],
             ['custom', 'Eigene Farbe'],
+            ['gradient', 'Farbverlauf'],
             ...(state.lighting.presetId === 'custom' ? [['environment', 'HDRI-Umgebung']] : []),
           ],
-          isCustom ? 'custom' : state.scene.background,
-          (value) => {
-            state.scene.background = value === 'custom' ? '#dfe6ee' : value;
-            emit('scene');
-          },
+          isCustom ? 'custom' : scene.background,
+          (value) => set('background')(value === 'custom' ? '#dfe6ee' : value),
         ),
       ),
       isCustom
@@ -698,20 +706,64 @@ function scenePanel() {
             'Farbe',
             h('input', {
               type: 'color',
-              value: state.scene.background,
-              oninput: (event) => {
-                state.scene.background = event.target.value;
-                emit('scene:live');
-              },
+              value: scene.background,
+              oninput: (event) => set('background', true)(event.target.value),
             }),
           )
         : null,
-      state.scene.background === 'environment'
+      scene.background === 'gradient'
+        ? [
+            field(
+              'Verlauf',
+              selectControl(
+                [
+                  ['linear', 'Von oben nach unten'],
+                  ['radial', 'Von der Mitte nach außen'],
+                ],
+                scene.gradientType,
+                set('gradientType'),
+              ),
+            ),
+            h(
+              'div',
+              { class: 'field-grid two' },
+              colorField(scene.gradientType === 'radial' ? 'Mitte' : 'Oben', 'gradientFrom'),
+              colorField(scene.gradientType === 'radial' ? 'Rand' : 'Unten', 'gradientTo'),
+            ),
+          ]
+        : null,
+      environment
         ? null
-        : toggle('Boden mit Schatten', state.scene.ground, (checked) => {
-            state.scene.ground = checked;
-            emit('scene');
-          }),
+        : [
+            field(
+              'Boden',
+              selectControl(Object.entries(FLOORS), scene.floor, set('floor')),
+            ),
+            scene.floor === 'cove' ? colorField('Farbe der Hohlkehle', 'coveColor') : null,
+            scene.floor !== 'none'
+              ? [
+                  slider('Spiegelung', {
+                    min: 0,
+                    max: 100,
+                    value: Math.round(scene.reflection * 100),
+                    format: (value) => `${value} %`,
+                    title: 'Der Boden spiegelt Modell und Licht. Auf dunklem Hintergrund passt eine dunkle Lichtvorlage',
+                    oninput: (value) => set('reflection', true)(value / 100),
+                    onchange: () => emit('scene'),
+                  }),
+                  scene.reflection > 0
+                    ? slider('Unschärfe der Spiegelung', {
+                        min: 0,
+                        max: 100,
+                        value: Math.round(scene.reflectionBlur * 100),
+                        format: (value) => `${value} %`,
+                        title: 'Nur im Rendering sichtbar',
+                        oninput: (value) => set('reflectionBlur', true)(value / 100),
+                      })
+                    : null,
+                ]
+              : null,
+          ],
     ],
   };
 }

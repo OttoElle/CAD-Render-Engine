@@ -27,6 +27,7 @@ import {
   fileKeys,
 } from './persistence.js';
 import { sectionToPlane } from './section.js';
+import { sceneGradient } from './backdrop.js';
 import { renderTree, setCollapsed } from './tree.js';
 import { renderPanel, identicalParts } from './panels.js';
 import { h } from './dom.js';
@@ -115,8 +116,12 @@ function applySceneAndLighting() {
     lights: state.lighting.lights,
     rotation: state.lighting.rotation,
     intensity: state.lighting.intensity,
-    ground: state.scene.ground,
+    floor: state.scene.floor,
     background: state.scene.background,
+    gradient: sceneGradient(state.scene),
+    coveColor: state.scene.coveColor,
+    reflection: state.scene.reflection,
+    reflectionBlur: state.scene.reflectionBlur,
   });
 }
 
@@ -191,8 +196,9 @@ function updateOutputFrame() {
   // A rendering shown over the viewport covers the view the frame belongs to.
   const show = cropped && state.parts.length > 0 && !state.selected.startsWith('render:');
   outputFrameEl.hidden = !show;
-  if (!show) return;
   const frame = viewer.getOutputFrame(width / height);
+  viewer.setBackdropFrame(frame);
+  if (!show) return;
   Object.assign(outputFrameEl.style, {
     left: `${frame.x}px`,
     top: `${frame.y}px`,
@@ -311,7 +317,13 @@ async function beginRender() {
       height,
       samples: targetSamples,
       transparent: render.transparent,
-      ground: state.scene.ground,
+      backdrop: {
+        floor: state.scene.floor,
+        gradient: state.scene.background === 'gradient' ? sceneGradient(state.scene) : null,
+        coveColor: state.scene.coveColor,
+        reflection: state.scene.reflection,
+        reflectionBlur: state.scene.reflectionBlur,
+      },
       fov: frame.fov,
       denoise: state.output.denoise,
       device: state.output.device,
@@ -720,7 +732,7 @@ viewer.onPartClick = (partId, point, normal) => {
   if (pickingHighlight) {
     if (!point) return;
     placeHighlight(pickingHighlight, point, normal);
-    if (pickingHighlight.el < 0 && state.scene.ground && !state.output.transparent) {
+    if (pickingHighlight.el < 0 && state.scene.floor !== 'none' && !state.output.transparent) {
       setStatus('Das Licht liegt unter dem Horizont und wird im Rendering vom Boden verdeckt.', { timeout: 5000 });
     }
     setPickingHighlight(null);

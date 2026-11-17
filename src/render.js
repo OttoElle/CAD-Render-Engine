@@ -5,6 +5,18 @@ import { initUNetFromURL } from 'oidn-webgpu';
 import { fovToFocalLength } from './viewer.js';
 import { boxSide, buildCap, clipGeometry } from './section.js';
 import { applyFinishTangents } from './materials.js';
+import {
+  buildFloorGeometry,
+  buildCoveGeometry,
+  placeCove,
+  floorMaterialParams,
+  floorFresnel,
+  gradientAt,
+  paintGradient,
+  renderedGradientCss,
+  environmentSampler,
+  coveAlbedo,
+} from './backdrop.js';
 
 // Open Image Denoise model, shipped with the app so rendering works offline.
 const DENOISE_WEIGHTS_URL = `${import.meta.env.BASE_URL}oidn/rt_hdr_alb_nrm_small.tza`;
@@ -13,7 +25,7 @@ const DENOISE_WEIGHTS_URL = `${import.meta.env.BASE_URL}oidn/rt_hdr_alb_nrm_smal
  * Builds a clean copy of the viewer scene for the path tracer: visible parts
  * only, without edges, selection highlight or helper objects.
  */
-function buildRenderScene(viewer, { transparent, ground }) {
+function buildRenderScene(viewer, { transparent, backdrop, camera, width, height }) {
   const scene = new THREE.Scene();
 
   const root = new THREE.Group();
@@ -82,32 +94,145 @@ function buildRenderScene(viewer, { transparent, ground }) {
     scene.background = viewer.backgroundColor.clone();
   }
 
+  if (backdrop.gradient && !transparent && !environmentBackground) {
+    // The gradient is painted behind the finished image (see startRender).
+    scene.background = null;
+  }
+
   // An HDRI background brings its own ground, so no floor is added there.
-  if (ground && !transparent && !environmentBackground) {
-    // The path tracer has no shadow catcher, so the floor is a real surface.
-    // Its albedo is chosen so that the unshadowed floor reflects exactly the
-    // background colour and fades into it without a visible horizon.
-    const { center, radius } = viewer.bounds;
-    const background = viewer.backgroundColor;
-    const irradiance = viewer.environmentTexture.userData.floorIrradiance;
-    const intensity = Math.max(viewer.scene.environmentIntensity, 1e-3);
-    const albedo = new THREE.Color().setRGB(
-      Math.min((background.r * Math.PI) / (irradiance[0] * intensity), 0.98),
-      Math.min((background.g * Math.PI) / (irradiance[1] * intensity), 0.98),
-      Math.min((background.b * Math.PI) / (irradiance[2] * intensity), 0.98),
-      THREE.LinearSRGBColorSpace,
-    );
-    const floor = new THREE.Mesh(
-      new THREE.CircleGeometry(radius * 60, 96),
-      new THREE.MeshPhysicalMaterial({ color: albedo, roughness: 1, metalness: 0, specularIntensity: 0 }),
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(center.x, viewer.ground.position.y, center.z);
-    scene.add(floor);
+  if (!transparent && !environmentBackground) {
+    if (backdrop.floor === 'shadow') scene.add(buildFloor(viewer, camera, backdrop, width / height));
+    if (backdrop.floor === 'cove') scene.add(buildCove(viewer, camera, backdrop));
   }
 
   scene.updateMatrixWorld(true);
   return scene;
+}
+
+/**
+ * The path tracer has no shadow catcher, so the floor is a real surface. Its
+ * colour is chosen per vertex so that, where nothing shades it, it shows
+ * exactly the background behind it and fades into it without a visible
+ * horizon: a flat colour, or the colour gradient at that point of the image.
+ * A reflective floor also mirrors the environment; that light is taken off
+ * its colour, so it stays seamless apart from reflections of the model and of
+ * bright lights.
+ */
+function buildFloor(viewer, camera, backdrop, aspect) {
+  const { center, radius } = viewer.bounds;
+  const groundY = viewer.ground.position.y;
+  const geometry = buildFloorGeometry(radius, radius * 60);
+  const position = geometry.attributes.position;
+  const colors = new Float32Array(position.count * 4);
+  const irradiance = viewer.environmentTexture.userData.floorIrradiance;
+  const intensity = Math.max(viewer.scene.environmentIntensity, 1e-3);
+  const { gradient, reflection, reflectionBlur } = backdrop;
+  const sample =
+    reflection > 0 ? environmentSampler(viewer.environmentTexture, viewer.scene.environmentRotation.y) : null;
+  const roughness = floorMaterialParams(reflection, reflectionBlur).roughness;
+  // Rough reflections average the environment over a small cone around the mirror direction.
+  const spread = Math.tan(Math.atan(roughness * roughness) * 1.5);
+
+  const world = new THREE.Vector3();
+  const local = new THREE.Vector3();
+  const view = new THREE.Vector3();
+  const mirror = new THREE.Vector3();
+  const u = new THREE.Vector3();
+  const v = new THREE.Vector3();
+  const probe = new THREE.Vector3();
+  const target = new THREE.Color();
+  const env = new THREE.Color();
+  const sum = new THREE.Color();
+  camera.updateMatrixWorld();
+
+  for (let i = 0; i < position.count; i++) {
+    world.fromBufferAttribute(position, i);
+    world.x += center.x;
+    world.y = groundY;
+    world.z += center.z;
+
+    if (gradient) {
+      local.copy(world).applyMatrix4(camera.matrixWorldInverse);
+      const ndc = world.clone().project(camera);
+      // Points behind the camera only show up in reflections; they get the bottom of the gradient.
+      const x = local.z < 0 ? (ndc.x + 1) / 2 : 0.5;
+      const y = local.z < 0 ? (1 - ndc.y) / 2 : 1;
+      target.copy(gradientAt(gradient, x, y, aspect)).convertSRGBToLinear();
+    } else {
+      target.copy(viewer.backgroundColor);
+    }
+
+    let fresnel = 0;
+    if (sample) {
+      view.copy(world).sub(camera.position).normalize();
+      fresnel = floorFresnel(reflection, Math.abs(view.y));
+      mirror.set(view.x, Math.abs(view.y), view.z);
+      sum.setRGB(0, 0, 0);
+      if (spread < 1e-3) {
+        sample(mirror, sum);
+      } else {
+        u.set(0, 1, 0).cross(mirror);
+        if (u.lengthSq() < 1e-8) u.set(1, 0, 0);
+        u.normalize();
+        v.crossVectors(mirror, u);
+        const taps = 12;
+        for (let k = 0; k < taps; k++) {
+          const angle = (k / taps) * Math.PI * 2;
+          const reach = spread * (k % 2 ? 0.45 : 0.9);
+          probe
+            .copy(mirror)
+            .addScaledVector(u, Math.cos(angle) * reach)
+            .addScaledVector(v, Math.sin(angle) * reach)
+            .normalize();
+          if (probe.y < 0) probe.y = -probe.y;
+          sum.add(sample(probe, env));
+        }
+        sum.multiplyScalar(1 / taps);
+      }
+      target.r -= fresnel * sum.r * intensity;
+      target.g -= fresnel * sum.g * intensity;
+      target.b -= fresnel * sum.b * intensity;
+    }
+
+    const scale = Math.PI / (Math.max(1 - fresnel, 1e-3) * intensity);
+    colors[i * 4] = Math.min(Math.max((target.r * scale) / irradiance[0], 0), 0.98);
+    colors[i * 4 + 1] = Math.min(Math.max((target.g * scale) / irradiance[1], 0), 0.98);
+    colors[i * 4 + 2] = Math.min(Math.max((target.b * scale) / irradiance[2], 0), 0.98);
+    colors[i * 4 + 3] = 1;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 4));
+
+  const floor = new THREE.Mesh(
+    geometry,
+    new THREE.MeshPhysicalMaterial({ color: 0xffffff, vertexColors: true, ...floorMaterialParams(reflection, reflectionBlur) }),
+  );
+  floor.position.set(center.x, groundY, center.z);
+  floor.userData.ownGeometry = true;
+  return floor;
+}
+
+/**
+ * A studio cove behind the model, turned to the camera like in the real-time
+ * view. Lights behind it at infinity would be blocked completely, which a
+ * real studio avoids by putting the lights inside the cove; letting shadow
+ * rays pass through it does the same here.
+ */
+function buildCove(viewer, camera, backdrop) {
+  const cove = new THREE.Mesh(
+    buildCoveGeometry(viewer.bounds.radius),
+    new THREE.MeshPhysicalMaterial({
+      color: coveAlbedo(
+        backdrop.coveColor,
+        viewer.environmentTexture.userData.floorIrradiance,
+        viewer.scene.environmentIntensity,
+      ),
+      ...floorMaterialParams(backdrop.reflection, backdrop.reflectionBlur, 0.9),
+    }),
+  );
+  cove.userData.ownGeometry = true;
+  cove.visibleToShadowRays = false;
+  placeCove(cove, camera, viewer.controls.target, viewer.bounds.center, viewer.ground.position.y);
+  return cove;
 }
 
 const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -149,7 +274,8 @@ async function requestDevice(kind) {
  * accumulated so far.
  */
 export async function startRender(viewer, options) {
-  const { width, height, transparent, ground, fov, denoise, gentle, dof, onProgress } = options;
+  const { width, height, transparent, backdrop, fov, denoise, gentle, dof, onProgress } = options;
+  const gradient = !transparent && !viewer.showsEnvironmentBackground ? backdrop.gradient : null;
   // Test hook for trying settings from the console, e.g. window.__renderDebug = { samples: 4 }.
   const debug = window.__renderDebug;
   const samples = debug?.samples ?? options.samples;
@@ -173,8 +299,6 @@ export async function startRender(viewer, options) {
   renderer.toneMapping = viewer.renderer.toneMapping;
   renderer.setClearColor(0x000000, 0);
 
-  const scene = buildRenderScene(viewer, { transparent, ground });
-
   // With depth of field the camera gets a real aperture; otherwise everything is sharp.
   const camera = dof ? new PhysicalCamera() : new THREE.PerspectiveCamera();
   camera.copy(viewer.camera);
@@ -193,6 +317,10 @@ export async function startRender(viewer, options) {
   }
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld(true);
+
+  const scene = buildRenderScene(viewer, { transparent, backdrop, camera, width, height });
+  // While rendering, the gradient shows behind the canvas; at the end it is painted into the image.
+  if (gradient) canvas.style.background = renderedGradientCss(gradient);
 
   const pathTracer = new WebGPUPathTracer(renderer);
   pathTracer.maxSamples = samples;
@@ -302,7 +430,16 @@ export async function startRender(viewer, options) {
       // A WebGPU canvas only holds its image until the frame is presented,
       // so the PNG has to be captured right after drawing.
       state = 'complete';
-      canvas.toBlob((blob) => {
+      let source = canvas;
+      if (gradient) {
+        source = document.createElement('canvas');
+        source.width = width;
+        source.height = height;
+        const context = source.getContext('2d');
+        paintGradient(context, gradient, width, height);
+        context.drawImage(canvas, 0, 0);
+      }
+      source.toBlob((blob) => {
         cleanup();
         resolveDone(blob);
       }, 'image/png');

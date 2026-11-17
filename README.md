@@ -19,6 +19,7 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 7:** Material-Feintuning mit Reglern, gebürsteten und gedrehten
   Oberflächen und erweiterter Bibliothek
 - [x] **Schritt 8:** Einzelne Softboxen, weitere Lichtvorlagen und Belichtung
+- [x] **Schritt 9:** Farbverläufe, Hohlkehle und spiegelnder Boden
 
 ## Ablauf
 
@@ -49,7 +50,12 @@ die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
    verziehen die Spiegelungen quer zu den Riefen. Die Schliffrichtung oder
    Drehachse ergibt sich automatisch aus der Form des Bauteils oder wird als
    Achse gewählt.
-5. **Szene:** Hintergrundfarbe und Boden mit Schatten.
+5. **Szene:** Hintergrund als Farbe oder Farbverlauf (von oben nach unten oder
+   von der Mitte nach außen). Der Boden zeigt nur Schatten und geht nahtlos in
+   den Hintergrund über, auch beim Farbverlauf. Er kann spiegeln, etwa wie
+   schwarzes Acrylglas. Alternativ steht das Modell in einer Hohlkehle, die
+   wie im Fotostudio hinter dem Modell nach oben läuft und sich mit der
+   Kamera dreht.
 6. **Beleuchtung:** Lichtvorlage (fünf Studio-Aufbauten, Tageslicht, bewölkter
    Himmel, Werkhalle) oder eigene HDRI-Datei (.hdr, .exr), Drehung und
    Belichtung in Blendenstufen. Eine HDRI-Datei lässt sich auch einfach ins
@@ -121,6 +127,7 @@ Testmodell liegt unter `samples/Bracket.step`.
 - `src/viewer.js` ist die Echtzeit-Ansicht (WebGL) mit Kamera, Boden und
   Bildausschnitt, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.
 - `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen.
+- `src/backdrop.js` baut Boden, Hohlkehle und Farbverläufe für Ansicht und Rendering.
 - `src/materials.js` enthält die Materialbibliothek und die Schliffbilder,
   `src/environment.js` erzeugt die Lichtvorlagen und Softboxen als
   HDR-Umgebung direkt im Code.

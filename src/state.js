@@ -12,7 +12,22 @@ export function withIds(items) {
   return items.map((item) => ({ ...item, id: newId() }));
 }
 
-export const defaultScene = () => ({ background: 'light', ground: true });
+export const defaultScene = () => ({
+  background: 'light',
+  floor: 'shadow',
+  gradientType: 'linear',
+  gradientFrom: '#ffffff',
+  gradientTo: '#c9ced6',
+  coveColor: '#e4e6ea',
+  reflection: 0,
+  reflectionBlur: 0.1,
+});
+
+export const FLOORS = {
+  shadow: 'Boden mit Schatten',
+  cove: 'Hohlkehle',
+  none: 'Kein Boden',
+};
 export const defaultLighting = () => ({
   presetId: 'studio-soft',
   rotation: 0,
@@ -58,7 +73,11 @@ export const state = {
    * `tuning` holds the slider values (roughness, metalness, clearcoat, finish, finishAxis, finishStrength).
    */
   materials: [],
-  /** `background` is 'light', 'grey', 'white', 'dark', 'environment' (show the HDRI) or a hex colour. */
+  /**
+   * `background` is 'light', 'grey', 'white', 'dark', 'gradient', 'environment' (show the HDRI) or a hex colour.
+   * `floor` is 'shadow' (seamless floor that only shows shadows and reflections), 'cove' (a backdrop curving
+   * up behind the model) or 'none'. `reflection` is the floor's reflectance (0 to 1).
+   */
   scene: defaultScene(),
   /**
    * `hdriName` is set while a user-supplied HDRI file is loaded (presetId 'custom').

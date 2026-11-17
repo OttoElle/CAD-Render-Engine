@@ -3,6 +3,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createMaterial, finishFrame, applyFinishTangents } from './materials.js';
 import { buildEnvironmentTexture, getLightPreset, CUSTOM_SHADOW } from './environment.js';
 import { buildCap } from './section.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
+import { buildCoveGeometry, placeCove, gradientCss, floorMaterialParams, coveAlbedo, REFLECTION_F90_SCALE } from './backdrop.js';
 
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
 const BLACK = new THREE.Color(0x000000);
@@ -20,6 +22,45 @@ const SENSOR_HEIGHT = 24;
 export const fovToFocalLength = (fov) => SENSOR_HEIGHT / 2 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);
 export const focalLengthToFov = (focalLength) =>
   THREE.MathUtils.radToDeg(2 * Math.atan(SENSOR_HEIGHT / 2 / focalLength));
+
+/**
+ * Blends the mirror image into the floor by the Fresnel term of a surface with
+ * the given reflectance: faint from above, stronger at grazing angles.
+ */
+const FLOOR_REFLECTION_SHADER = {
+  name: 'FloorReflectionShader',
+  uniforms: {
+    color: { value: null },
+    tDiffuse: { value: null },
+    textureMatrix: { value: null },
+    strength: { value: 0 },
+  },
+  vertexShader: /* glsl */ `
+    uniform mat4 textureMatrix;
+    varying vec4 vUv;
+    varying vec3 vWorld;
+    #include <common>
+    void main() {
+      vUv = textureMatrix * vec4(position, 1.0);
+      vec4 world = modelMatrix * vec4(position, 1.0);
+      vWorld = world.xyz;
+      gl_Position = projectionMatrix * viewMatrix * world;
+    }`,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float strength;
+    varying vec4 vUv;
+    varying vec3 vWorld;
+    void main() {
+      vec4 mirrored = texture2DProj(tDiffuse, vUv);
+      float cosTheta = clamp(abs(normalize(cameraPosition - vWorld).y), 0.0, 1.0);
+      float f90 = min(1.0, strength * ${REFLECTION_F90_SCALE.toFixed(2)});
+      float fresnel = strength + (f90 - strength) * pow(1.0 - cosTheta, 5.0);
+      gl_FragColor = vec4(mirrored.rgb, mirrored.a * clamp(fresnel, 0.0, 1.0));
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`,
+};
 
 /** Below this field of view the camera counts as a parallel projection. */
 const PARALLEL_FOV = 1;
@@ -39,7 +80,8 @@ const VIEW_DIRECTIONS = {
 export class Viewer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // Transparent where a colour gradient behind the canvas shows through.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     // Neutral tone mapping keeps material colours true, which matters for product shots.
     this.renderer.toneMapping = THREE.NeutralToneMapping;
@@ -75,12 +117,26 @@ export class Viewer {
     this.ground.raycast = () => {};
     this.scene.add(this.ground);
 
+    // Mirror image of the model in a reflective floor, blended in by the Fresnel term.
+    this.reflector = null;
+
+    // Studio cove behind the model; it turns with the camera so it always fills the background.
+    this.cove = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshPhysicalMaterial({ roughness: 0.9 }));
+    this.cove.receiveShadow = true;
+    this.cove.visible = false;
+    this.cove.raycast = () => {};
+    this.scene.add(this.cove);
+
     this.lighting = {
       presetId: 'studio-soft',
       rotation: 0,
       intensity: 1,
-      ground: true,
+      floor: 'shadow',
       background: 'light',
+      gradient: null,
+      coveColor: '#e4e6ea',
+      reflection: 0,
+      reflectionBlur: 0.1,
     };
 
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.1, 1000);
@@ -183,7 +239,12 @@ export class Viewer {
   _notifyView() {
     this._needsRender = true;
     this._viewChanged = false;
+    this._placeCove();
     this.onViewChange?.();
+  }
+
+  _placeCove() {
+    if (this.cove.visible) placeCove(this.cove, this.camera, this.controls.target, this.bounds.center, this._groundY ?? 0);
   }
 
   /** Reserves space on the left for floating UI. The view glides over to the new centre. */
@@ -261,6 +322,8 @@ export class Viewer {
     box.getBoundingSphere(this.bounds);
     if (!(this.bounds.radius > 0)) this.bounds.set(new THREE.Vector3(), 1);
     this._groundY = Number.isFinite(box.min.y) ? box.min.y : 0;
+    this.cove.geometry.dispose();
+    this.cove.geometry = parts.length > 0 ? buildCoveGeometry(this.bounds.radius) : new THREE.BufferGeometry();
     this._updateShadowSetup();
 
     this.roll = 0;
@@ -402,14 +465,35 @@ export class Viewer {
       this.scene.background = this.environmentTexture;
       this.scene.backgroundRotation.y = rotation;
       this.scene.backgroundIntensity = this.lighting.intensity;
+    } else if (this.lighting.background === 'gradient') {
+      // The gradient is drawn behind the transparent canvas (see setBackdropFrame).
+      this.scene.background = null;
+      this.scene.backgroundIntensity = 1;
     } else {
       // Either a named background or a custom colour such as "#dfe6ee".
       this._backgroundColor.set(BACKGROUNDS[this.lighting.background] ?? this.lighting.background);
       this.scene.background = this._backgroundColor;
       this.scene.backgroundIntensity = 1;
     }
+    this.renderer.setClearColor(0x000000, 0);
+    this._updateBackdropCss();
     this._updateShadowSetup();
     this.requestRender();
+  }
+
+  /**
+   * Lays the colour gradient out over the output frame, so that it matches
+   * the final image. Called whenever the frame moves.
+   */
+  setBackdropFrame(frame) {
+    this._backdropFrame = frame;
+    this._updateBackdropCss();
+  }
+
+  _updateBackdropCss() {
+    const show = this.lighting.background === 'gradient' && this.lighting.gradient && this._backdropFrame;
+    const css = show ? gradientCss(this.lighting.gradient, this._backdropFrame) : '';
+    if (this.canvas.style.background !== css) this.canvas.style.background = css;
   }
 
   /** Background as a plain colour, also while an HDRI is shown instead. */
@@ -422,8 +506,19 @@ export class Viewer {
     const hasModel = this.parts.length > 0;
 
     // An HDRI background brings its own ground, so the shadow plane would float in it.
-    this.ground.visible = hasModel && this.lighting.ground && !this.showsEnvironmentBackground;
-    this.shadowLight.visible = this.ground.visible;
+    const floor = hasModel && !this.showsEnvironmentBackground ? this.lighting.floor : 'none';
+    this.ground.visible = floor === 'shadow';
+    this.cove.visible = floor === 'cove';
+    this.shadowLight.visible = floor !== 'none';
+    this._updateReflector(floor === 'shadow' && this.lighting.reflection > 0);
+    if (this.cove.visible) {
+      const params = floorMaterialParams(this.lighting.reflection, this.lighting.reflectionBlur, 0.9);
+      Object.assign(this.cove.material, params);
+      this.cove.material.color.copy(
+        coveAlbedo(this.lighting.coveColor, this.environmentTexture.userData.floorIrradiance, this.lighting.intensity),
+      );
+      this._placeCove();
+    }
     if (!hasModel || !this._keyDirection) return;
 
     const direction = this._keyDirection
@@ -448,6 +543,54 @@ export class Viewer {
     this.ground.material.opacity = this._shadowSettings.opacity;
     this.ground.scale.setScalar(radius * 12);
     this.ground.position.set(center.x, this._groundY ?? center.y - radius, center.z);
+    if (this.reflector) {
+      this.reflector.scale.setScalar(radius * 60);
+      this.reflector.position.copy(this.ground.position);
+      this.reflector.material.uniforms.strength.value = this.lighting.reflection;
+    }
+  }
+
+  /** Creates the mirror for a reflective floor on demand and removes it again when not needed. */
+  _updateReflector(needed) {
+    if (!needed) {
+      if (this.reflector) {
+        this.scene.remove(this.reflector);
+        this.reflector.dispose();
+        this.reflector = null;
+      }
+      return;
+    }
+    if (this.reflector) return;
+    const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    const reflector = new Reflector(new THREE.PlaneGeometry(1, 1), {
+      textureWidth: size.x,
+      textureHeight: size.y,
+      clipBias: 0.0005,
+      shader: FLOOR_REFLECTION_SHADER,
+    });
+    reflector.rotation.x = -Math.PI / 2;
+    reflector.renderOrder = -1;
+    reflector.material.transparent = true;
+    reflector.material.depthWrite = false;
+    reflector.raycast = () => {};
+    // The floor mirrors the lighting environment like it does in the rendering. The shadow
+    // plane lies in the mirror itself and must not show up in the reflection.
+    const render = reflector.onBeforeRender;
+    reflector.onBeforeRender = (...args) => {
+      const { scene } = this;
+      const saved = [this.ground.visible, scene.background, scene.backgroundIntensity, scene.backgroundBlurriness];
+      const savedRotation = scene.backgroundRotation.y;
+      this.ground.visible = false;
+      scene.background = this.environmentTexture;
+      scene.backgroundRotation.y = scene.environmentRotation.y;
+      scene.backgroundIntensity = scene.environmentIntensity;
+      scene.backgroundBlurriness = this.lighting.reflectionBlur * 0.4;
+      render.apply(reflector, args);
+      [this.ground.visible, scene.background, scene.backgroundIntensity, scene.backgroundBlurriness] = saved;
+      scene.backgroundRotation.y = savedRotation;
+    };
+    this.reflector = reflector;
+    this.scene.add(reflector);
   }
 
   /** Rebuilds the three.js material of a part after its materialId or colour changed. */
@@ -795,6 +938,10 @@ export class Viewer {
     const width = Math.max(parent.clientWidth, 1);
     const height = Math.max(parent.clientHeight, 1);
     this.renderer.setSize(width, height, false);
+    if (this.reflector) {
+      const size = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+      this.reflector.getRenderTarget().setSize(size.x, size.y);
+    }
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this._applyViewOffset();
@@ -815,6 +962,7 @@ export class Viewer {
     }
     if (this._viewChanged) {
       this._viewChanged = false;
+      this._placeCove();
       this.onViewChange?.();
     }
     // Caps follow a moving section plane live when that is cheap, otherwise once it rests.

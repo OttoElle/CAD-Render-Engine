@@ -10,6 +10,7 @@ import {
   QUALITY,
   OUTPUT_SIZES,
   RENDER_DEVICES,
+  FLOORS,
 } from './state.js';
 import { getMaterialDef, sanitizeTuning } from './materials.js';
 import { getLightPreset, presetLights, sanitizeLight } from './environment.js';
@@ -165,6 +166,15 @@ function syncSummaries() {
 /** Puts the scene, lighting, camera and output settings of a project or template into the state. */
 export function applySettings(record) {
   state.scene = mergeTyped(defaultScene(), record.scene);
+  // Projects from before the floor choice only had a switch for the shadow floor.
+  if (record.scene && record.scene.floor === undefined && record.scene.ground === false) state.scene.floor = 'none';
+  if (!FLOORS[state.scene.floor]) state.scene.floor = 'shadow';
+  if (!['linear', 'radial'].includes(state.scene.gradientType)) state.scene.gradientType = 'linear';
+  state.scene.reflection = Math.min(Math.max(state.scene.reflection, 0), 1);
+  state.scene.reflectionBlur = Math.min(Math.max(state.scene.reflectionBlur, 0), 1);
+  for (const key of ['gradientFrom', 'gradientTo', 'coveColor']) {
+    if (!/^#[0-9a-f]{6}$/i.test(state.scene[key])) state.scene[key] = defaultScene()[key];
+  }
   state.lighting = mergeTyped(defaultLighting(), record.lighting);
   if (state.lighting.presetId !== 'custom') {
     state.lighting.presetId = getLightPreset(state.lighting.presetId).id;
@@ -312,7 +322,7 @@ export function initProjects() {
     if (legacy) {
       first.lighting = legacy.lighting;
       first.output = legacy.output;
-      if (legacy.scene) first.scene = { ground: legacy.scene.ground };
+      if (legacy.scene) first.scene = { floor: legacy.scene.ground === false ? 'none' : 'shadow' };
     }
     index = { currentId: first.id, projects: [first] };
   }
