@@ -4,6 +4,7 @@ import { PhysicalCamera } from 'three-gpu-pathtracer/src/objects/PhysicalCamera.
 import { initUNetFromURL } from 'oidn-webgpu';
 import { fovToFocalLength } from './viewer.js';
 import { boxSide, buildCap, clipGeometry } from './section.js';
+import { applyFinishTangents } from './materials.js';
 
 // Open Image Denoise model, shipped with the app so rendering works offline.
 const DENOISE_WEIGHTS_URL = `${import.meta.env.BASE_URL}oidn/rt_hdr_alb_nrm_small.tza`;
@@ -36,6 +37,9 @@ function buildRenderScene(viewer, { transparent, ground }) {
 
     const geometry = clipGeometry(source, cutting);
     if (!geometry) continue;
+    // Brushed or turned marks need tangents on the new geometry as well.
+    const finish = part.finishFrame ? (target) => applyFinishTangents(target, part.look.finish, part.finishFrame) : null;
+    finish?.(geometry);
     const own = (mesh) => {
       mesh.userData.ownGeometry = true;
       root.add(mesh);
@@ -57,7 +61,9 @@ function buildRenderScene(viewer, { transparent, ground }) {
         cap.dispose();
         cap = trimmed;
       }
-      if (cap) own(new THREE.Mesh(cap, capMaterial));
+      if (!cap) continue;
+      if (capMaterial === material) finish?.(cap);
+      own(new THREE.Mesh(cap, capMaterial));
     }
   }
   scene.add(root);

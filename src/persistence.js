@@ -10,7 +10,7 @@ import {
   OUTPUT_SIZES,
   RENDER_DEVICES,
 } from './state.js';
-import { getMaterialDef } from './materials.js';
+import { getMaterialDef, sanitizeTuning } from './materials.js';
 import { getLightPreset } from './environment.js';
 
 /**
@@ -134,6 +134,7 @@ function modelSnapshot() {
     materials: state.materials.map((entry) => ({
       materialId: entry.materialId,
       colorHex: entry.colorHex,
+      tuning: { ...entry.tuning },
       partIds: [...entry.partIds],
     })),
     views: state.views.map(({ name, position, target, fov, roll }) => ({ name, position, target, fov, roll })),
@@ -184,12 +185,7 @@ export function applySettings(record) {
 export function applyModelData(record) {
   if (!record || record.fileName !== state.fileName || record.partCount !== state.parts.length) return null;
   const valid = (id) => Number.isInteger(id) && id >= 0 && id < state.parts.length;
-  state.materials = (record.materials || []).map((entry) => ({
-    id: newId(),
-    materialId: getMaterialDef(entry.materialId).id,
-    colorHex: entry.colorHex,
-    partIds: new Set((entry.partIds || []).filter(valid)),
-  }));
+  state.materials = (record.materials || []).map((entry) => restoreEntry(entry, (entry.partIds || []).filter(valid)));
   state.views = (record.views || []).map((view) => ({ id: newId(), ...view }));
   state.sections = (record.sections || [])
     .filter((section) => [0, 1, 2].includes(section.axis) && Number.isFinite(section.position))
@@ -222,8 +218,20 @@ export function applyPalette(palette) {
       partIds.add(part.id);
       claimed.add(part.id);
     }
-    return { id: newId(), materialId: getMaterialDef(item.materialId).id, colorHex: item.colorHex, partIds };
+    return restoreEntry(item, partIds);
   });
+}
+
+/** A material entry from stored data. Entries saved before the sliders existed get the library values. */
+function restoreEntry(saved, partIds) {
+  const def = getMaterialDef(saved.materialId);
+  return {
+    id: newId(),
+    materialId: def.id,
+    colorHex: /^#[0-9a-f]{6}$/i.test(saved.colorHex) ? saved.colorHex : def.color,
+    tuning: sanitizeTuning(def.id, saved.tuning),
+    partIds: new Set(partIds),
+  };
 }
 
 /** Template materials wait here while the project has no model yet. */
@@ -379,6 +387,7 @@ export async function saveTemplate(name) {
     materials: state.materials.map((entry) => ({
       materialId: entry.materialId,
       colorHex: entry.colorHex,
+      tuning: { ...entry.tuning },
       partNames: [...new Set([...entry.partIds].map((partId) => state.parts[partId]?.name).filter(Boolean))],
     })),
   };

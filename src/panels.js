@@ -13,7 +13,15 @@ import {
   removeMaterial,
   setPartsAssigned,
 } from './state.js';
-import { MATERIALS, getMaterialDef } from './materials.js';
+import {
+  MATERIALS,
+  MATERIAL_GROUPS,
+  FINISHES,
+  FINISH_AXES,
+  getMaterialDef,
+  defaultTuning,
+  isDefaultTuning,
+} from './materials.js';
 import { LIGHT_PRESETS } from './environment.js';
 
 const numberFormat = new Intl.NumberFormat('de-DE');
@@ -59,7 +67,7 @@ function toggle(label, checked, onchange, title) {
 }
 
 /** A range slider with its value shown next to the label. Returns the field; `set(value)` updates it from outside. */
-function slider(label, { min, max, step = 1, value, format, oninput, disabled, title }) {
+function slider(label, { min, max, step = 1, value, format, oninput, onchange, disabled, title }) {
   const output = h('output', null, format(value));
   const input = h('input', {
     type: 'range',
@@ -73,6 +81,8 @@ function slider(label, { min, max, step = 1, value, format, oninput, disabled, t
       output.textContent = format(next);
       oninput(next);
     },
+    // Fires once the slider is let go, for updates too costly to run while dragging.
+    onchange: onchange ? () => onchange(Number(input.value)) : null,
   });
   const node = h('label', { class: 'field', title }, h('span', { class: 'field-label' }, label, output), input);
   node.set = (next, text) => {
@@ -519,22 +529,50 @@ function cadMaterialPanel({ actions }) {
   };
 }
 
+/** The library as a select with one group per kind of material. */
+function materialSelect(value, onchange) {
+  const node = h('select', { onchange: (event) => onchange(event.target.value) });
+  for (const [group, label] of Object.entries(MATERIAL_GROUPS)) {
+    const optgroup = h('optgroup', { label });
+    for (const material of MATERIALS.filter((item) => item.group === group)) {
+      optgroup.append(new Option(material.label, material.id));
+    }
+    node.append(optgroup);
+  }
+  node.value = value;
+  return node;
+}
+
 function materialPanel(entry, { actions }) {
   const def = getMaterialDef(entry.materialId);
+  const { tuning } = entry;
+  const tune = (key, live = true) => (value) => {
+    tuning[key] = value;
+    emit(live ? 'materials:live' : 'materials');
+  };
+  const tuneSlider = (label, key, title) =>
+    slider(label, {
+      min: 0,
+      max: 100,
+      value: Math.round(tuning[key] * 100),
+      format: (value) => `${value} %`,
+      title,
+      oninput: (value) => tune(key)(value / 100),
+      onchange: () => emit('materials'),
+    });
+  const modified = entry.colorHex !== def.color || !isDefaultTuning(entry.materialId, tuning);
+
   return {
     title: 'Material',
     body: [
       field(
         'Material',
-        selectControl(
-          MATERIALS.filter((material) => material.color !== null).map((material) => [material.id, material.label]),
-          entry.materialId,
-          (value) => {
-            entry.materialId = value;
-            entry.colorHex = getMaterialDef(value).color;
-            emit('materials');
-          },
-        ),
+        materialSelect(entry.materialId, (value) => {
+          entry.materialId = value;
+          entry.colorHex = getMaterialDef(value).color;
+          entry.tuning = defaultTuning(value);
+          emit('materials');
+        }),
       ),
       field(
         'Farbe',
@@ -547,17 +585,46 @@ function materialPanel(entry, { actions }) {
           },
         }),
       ),
-      entry.colorHex !== def.color
+      tuneSlider('Rauheit', 'roughness', 'Niedrig spiegelt, hoch streut das Licht'),
+      tuneSlider('Metallisch', 'metalness', 'Metalle stehen auf 100 %, Kunststoffe und Lacke auf 0 %'),
+      tuneSlider('Klarlack', 'clearcoat', 'Glänzende Schicht über dem Material'),
+      field(
+        'Oberfläche',
+        selectControl(
+          Object.entries(FINISHES).map(([key, value]) => [key, value.label]),
+          tuning.finish,
+          tune('finish', false),
+        ),
+      ),
+      tuning.finish !== 'none'
+        ? [
+            field(
+              tuning.finish === 'turned' ? 'Drehachse' : 'Schliffrichtung',
+              selectControl(Object.entries(FINISH_AXES), tuning.finishAxis, tune('finishAxis', false)),
+            ),
+            slider('Ausprägung', {
+              min: 0,
+              max: 100,
+              value: Math.round(tuning.finishStrength * 100),
+              format: (value) => `${value} %`,
+              title: 'Wie stark die Spiegelungen quer zu den Riefen verwischen',
+              oninput: (value) => tune('finishStrength')(value / 100),
+              onchange: () => emit('materials'),
+            }),
+          ]
+        : null,
+      modified
         ? h(
             'button',
             {
               class: 'link',
               onclick: () => {
                 entry.colorHex = def.color;
+                entry.tuning = defaultTuning(entry.materialId);
                 emit('materials');
               },
             },
-            'Standardfarbe',
+            'Auf Vorgabe zurücksetzen',
           )
         : null,
       h('h3', { title: 'Hier anhaken oder direkt im Modell anklicken' }, `Bauteile (${entry.partIds.size})`),

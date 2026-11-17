@@ -2,7 +2,7 @@ import { Vector3 } from 'three';
 import { Viewer } from './viewer.js';
 import { ViewCube } from './viewcube.js';
 import { loadStepFile } from './step-loader.js';
-import { getMaterialDef } from './materials.js';
+import { getMaterialDef, resolveLook } from './materials.js';
 import { loadHdriFile } from './environment.js';
 import {
   initProjects,
@@ -95,9 +95,13 @@ function applyMaterials() {
     const entry = materialEntryOf(part.id);
     const materialId = entry ? entry.materialId : 'cad';
     const colorHex = entry ? entry.colorHex : `#${part.cadColor.getHexString()}`;
-    if (part.materialId === materialId && part.colorHex === colorHex) continue;
+    const look = resolveLook(materialId, colorHex, entry?.tuning);
+    const key = JSON.stringify(look);
+    if (part.lookKey === key) continue;
     part.materialId = materialId;
     part.colorHex = colorHex;
+    part.look = look;
+    part.lookKey = key;
     viewer.updatePartMaterial(part.id);
   }
 }
@@ -792,4 +796,4 @@ updateInset(true);
 openProject(initProjects());
 
 // Exposed for automated tests and debugging in the browser console.
-window.__cad = { viewer, state, actions, select, getMaterialDef };
+window.__cad = { viewer, state, actions, select, emit, getMaterialDef };

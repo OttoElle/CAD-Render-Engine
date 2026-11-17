@@ -16,6 +16,8 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 5:** Projekte und Vorlagen, helle Oberfläche mit schwebender
   Seitenleiste, genaue Kamerasteuerung mit Tiefenunschärfe, Wahl des Rendergeräts
 - [x] **Schritt 6:** Schnittansichten mit geschlossenen Schnittflächen
+- [x] **Schritt 7:** Material-Feintuning mit Reglern, gebürsteten und gedrehten
+  Oberflächen und erweiterter Bibliothek
 
 ## Ablauf
 
@@ -40,7 +42,12 @@ die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
 4. **Materialien:** Das Plus legt ein Material an. Bauteile werden in der Liste
    angehakt oder direkt im Modell angeklickt. Gleiche Bauteile, etwa alle
    Schrauben einer Größe, werden auf Wunsch gemeinsam zugewiesen. Bauteile
-   ohne Material behalten ihre CAD-Farbe.
+   ohne Material behalten ihre CAD-Farbe. Die Bibliothek ist nach Metall,
+   Kunststoff, Lack und Glas gegliedert. Regler für Rauheit, Metallisch und
+   Klarlack passen jedes Material an. Gebürstete und gedrehte Oberflächen
+   verziehen die Spiegelungen quer zu den Riefen. Die Schliffrichtung oder
+   Drehachse ergibt sich automatisch aus der Form des Bauteils oder wird als
+   Achse gewählt.
 5. **Szene:** Hintergrundfarbe und Boden mit Schatten.
 6. **Beleuchtung:** Lichtvorlage oder eigene HDRI-Datei (.hdr, .exr), Drehung und Helligkeit.
    Eine HDRI-Datei lässt sich auch einfach ins Fenster ziehen.

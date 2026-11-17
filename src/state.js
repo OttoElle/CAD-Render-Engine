@@ -1,4 +1,4 @@
-import { getMaterialDef } from './materials.js';
+import { getMaterialDef, defaultTuning } from './materials.js';
 
 export const defaultScene = () => ({ background: 'light', ground: true });
 export const defaultLighting = () => ({ presetId: 'studio-soft', rotation: 0, intensity: 1, hdriName: null });
@@ -35,7 +35,10 @@ export const state = {
   sections: [],
   /** How cut faces look: `mode` 'material' (like the part) or 'color'. */
   sectionCap: defaultSectionCap(),
-  /** Material entries: { id, materialId, colorHex, partIds:Set }. A part is in at most one entry. */
+  /**
+   * Material entries: { id, materialId, colorHex, tuning, partIds:Set }. A part is in at most one entry.
+   * `tuning` holds the slider values (roughness, metalness, clearcoat, finish, finishAxis, finishStrength).
+   */
   materials: [],
   /** `background` is 'light', 'grey', 'white', 'dark', 'environment' (show the HDRI) or a hex colour. */
   scene: defaultScene(),
@@ -133,6 +136,7 @@ export function addMaterial(materialId = 'alu-satin', { claimAll = true } = {}) 
     id: newId(),
     materialId,
     colorHex: getMaterialDef(materialId).color,
+    tuning: defaultTuning(materialId),
     partIds: new Set(),
   };
   // The first entry starts with every part, which is the common case for single parts.

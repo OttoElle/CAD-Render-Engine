@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { createMaterial } from './materials.js';
+import { createMaterial, finishFrame, applyFinishTangents } from './materials.js';
 import { buildEnvironmentTexture, getLightPreset, keyLightDirection, CUSTOM_SHADOW } from './environment.js';
 import { buildCap } from './section.js';
 
@@ -447,6 +447,7 @@ export class Viewer {
   updatePartMaterial(id) {
     const part = this.parts[id];
     if (!part) return;
+    if (this._applyFinish(part)) this._capsDirty = true;
     part.mesh.material.dispose();
     part.mesh.material = createMaterial(part);
     if (this.highlighted.has(id)) part.mesh.material.emissive.copy(SELECT_EMISSIVE);
@@ -455,6 +456,23 @@ export class Viewer {
       for (const cap of part.caps) cap.material = part.mesh.material;
     }
     this.requestRender();
+  }
+
+  /**
+   * Gives a part with brushed or turned marks the tangents its anisotropic
+   * shading needs. Returns true if the marks changed, so caps need them too.
+   */
+  _applyFinish(part) {
+    const finish = part.look?.finish ?? 'none';
+    const geometry = part.mesh.geometry;
+    part.finishFrame = finish === 'none' ? null : finishFrame(finish, part.look.finishAxis, geometry.boundingBox);
+    const key = part.finishFrame
+      ? `${finish}:${part.finishFrame.axis.toArray()}:${part.finishFrame.center.toArray()}`
+      : 'none';
+    if (geometry.userData.finishKey === key) return false;
+    geometry.userData.finishKey = key;
+    if (part.finishFrame) applyFinishTangents(geometry, finish, part.finishFrame);
+    return true;
   }
 
   // --- Section cuts -------------------------------------------------------------
@@ -521,6 +539,7 @@ export class Viewer {
       for (const plane of planes) {
         const geometry = buildCap(part.mesh.geometry, plane, offset);
         if (!geometry) continue;
+        if (part.finishFrame && !part.capMaterial) applyFinishTangents(geometry, part.look.finish, part.finishFrame);
         const cap = new THREE.Mesh(geometry, part.capMaterial || part.mesh.material);
         cap.castShadow = true;
         cap.raycast = () => {};
