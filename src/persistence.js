@@ -1,6 +1,7 @@
 import {
   state,
   newId,
+  withIds,
   defaultScene,
   defaultLighting,
   defaultCamera,
@@ -11,7 +12,7 @@ import {
   RENDER_DEVICES,
 } from './state.js';
 import { getMaterialDef, sanitizeTuning } from './materials.js';
-import { getLightPreset } from './environment.js';
+import { getLightPreset, presetLights, sanitizeLight } from './environment.js';
 
 /**
  * Projects and templates, kept in the browser.
@@ -121,7 +122,7 @@ function mergeTyped(defaults, saved) {
 function settingsSnapshot() {
   return {
     scene: { ...state.scene },
-    lighting: { ...state.lighting },
+    lighting: { ...state.lighting, lights: state.lighting.lights.map(({ id, ...light }) => light) },
     camera: { ...state.camera },
     output: { ...state.output },
   };
@@ -170,6 +171,15 @@ export function applySettings(record) {
     state.lighting.hdriName = null;
     if (state.scene.background === 'environment') state.scene.background = 'light';
   }
+  // Projects from before editable softboxes get the lights of their preset.
+  const savedLights = record.lighting?.lights;
+  state.lighting.lights = withIds(
+    Array.isArray(savedLights)
+      ? savedLights.map(sanitizeLight).filter(Boolean)
+      : state.lighting.presetId === 'custom'
+        ? []
+        : presetLights(getLightPreset(state.lighting.presetId)),
+  );
   state.camera = mergeTyped(defaultCamera(), record.camera);
   state.output = mergeTyped(defaultOutput(), record.output);
   if (!OUTPUT_SIZES[state.output.size]) state.output.size = 'view';

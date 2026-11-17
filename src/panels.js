@@ -4,6 +4,7 @@ import {
   state,
   emit,
   select,
+  withIds,
   QUALITY,
   OUTPUT_SIZES,
   RENDER_DEVICES,
@@ -22,7 +23,7 @@ import {
   defaultTuning,
   isDefaultTuning,
 } from './materials.js';
-import { LIGHT_PRESETS } from './environment.js';
+import { LIGHT_PRESETS, MAX_LIGHT_SIZE, getLightPreset, presetLights } from './environment.js';
 
 const numberFormat = new Intl.NumberFormat('de-DE');
 const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
@@ -715,7 +716,10 @@ function scenePanel() {
   };
 }
 
+const evFormat = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 1, signDisplay: 'exceptZero' });
+
 function lightingPanel({ actions }) {
+  const { lighting } = state;
   return {
     title: 'Beleuchtung',
     body: [
@@ -723,7 +727,7 @@ function lightingPanel({ actions }) {
         'Vorlage',
         selectControl(
           [...LIGHT_PRESETS.map((preset) => [preset.id, preset.label]), ['custom', 'Eigene HDRI-Datei …']],
-          state.lighting.presetId,
+          lighting.presetId,
           (value) => {
             if (value === 'custom') {
               // Stays on the previous preset until a file has actually been loaded.
@@ -731,40 +735,143 @@ function lightingPanel({ actions }) {
               actions.loadHdri();
               return;
             }
-            state.lighting.presetId = value;
-            state.lighting.hdriName = null;
+            lighting.presetId = value;
+            lighting.hdriName = null;
+            // A preset brings its own softboxes, which replace the current ones.
+            lighting.lights = withIds(presetLights(getLightPreset(value)));
             if (state.scene.background === 'environment') state.scene.background = 'light';
             emit('lighting');
           },
         ),
       ),
-      state.lighting.presetId === 'custom'
+      lighting.presetId === 'custom'
         ? [
-            h('div', { class: 'file-name' }, state.lighting.hdriName),
+            h('div', { class: 'file-name' }, lighting.hdriName),
             h('button', { onclick: actions.loadHdri }, 'Andere HDRI-Datei …'),
           ]
         : null,
       slider('Drehung', {
         min: -180,
         max: 180,
-        value: state.lighting.rotation,
+        value: lighting.rotation,
         format: (value) => `${value}°`,
+        title: 'Dreht alle Lichter um das Modell',
         oninput: (value) => {
-          state.lighting.rotation = value;
+          lighting.rotation = value;
           emit('lighting:live');
         },
       }),
-      slider('Helligkeit', {
-        min: 20,
-        max: 300,
-        step: 5,
-        value: Math.round(state.lighting.intensity * 100),
-        format: (value) => `${value} %`,
+      // Exposure in thirds of a stop, like a camera. Each stop doubles the light.
+      slider('Belichtung', {
+        min: -9,
+        max: 9,
+        value: Math.round(Math.log2(lighting.intensity) * 3),
+        format: (value) => `${evFormat.format(value / 3)} EV`,
+        title: 'Heller oder dunkler in Blendenstufen, der Hintergrund bleibt',
         oninput: (value) => {
-          state.lighting.intensity = value / 100;
+          lighting.intensity = 2 ** (value / 3);
           emit('lighting:live');
         },
       }),
+      h('button', { class: 'primary', onclick: actions.addLight }, 'Softbox anlegen'),
+    ],
+  };
+}
+
+const SIZE_STEPS = 0.5;
+
+function lightPanel(light, { actions }) {
+  const set = (key, live = true) => (value) => {
+    light[key] = value;
+    emit(live ? 'lighting:live' : 'lighting');
+  };
+  const angle = (label, key, min, max, title) =>
+    slider(label, { min, max, value: light[key], format: (value) => `${value}°`, title, oninput: set(key) });
+  // Power on a logarithmic slider from 0.1 to 1000.
+  const toSlider = (power) => Math.round(Math.log10(Math.max(power, 0.1)) * 50);
+  const fromSlider = (value) => Number((10 ** (value / 50)).toPrecision(2));
+  const picking = actions.isPickingHighlight(light);
+
+  return {
+    title: 'Softbox',
+    body: [
+      field(
+        'Name',
+        h('input', {
+          type: 'text',
+          value: light.name,
+          oninput: (event) => {
+            light.name = event.target.value || 'Softbox';
+            emit('lighting:live');
+          },
+        }),
+      ),
+      toggle('Aktiv', light.enabled, set('enabled', false)),
+      h(
+        'button',
+        {
+          class: picking ? 'active' : '',
+          onclick: () => actions.pickHighlight(light),
+          title: 'Setzt die Softbox so, dass ihr Glanzlicht auf dem angeklickten Punkt liegt',
+        },
+        picking ? 'Punkt im Modell anklicken …' : 'Glanzlicht setzen',
+      ),
+      angle('Richtung', 'az', -180, 180, '0° ist vorne, 90° rechts'),
+      angle('Höhe', 'el', -30, 90, '0° ist auf Höhe des Modells, 90° direkt darüber'),
+      slider('Breite', {
+        min: 1,
+        max: MAX_LIGHT_SIZE,
+        step: SIZE_STEPS,
+        value: light.width,
+        format: (value) => `${value}°`,
+        title: 'Größere Softboxen geben weichere Schatten bei gleicher Lichtmenge',
+        oninput: set('width'),
+      }),
+      slider('Höhe der Fläche', {
+        min: 1,
+        max: MAX_LIGHT_SIZE,
+        step: SIZE_STEPS,
+        value: light.height,
+        format: (value) => `${value}°`,
+        oninput: set('height'),
+      }),
+      field(
+        'Form',
+        selectControl(
+          [
+            ['rect', 'Rechteckig'],
+            ['round', 'Rund'],
+          ],
+          light.round ? 'round' : 'rect',
+          (value) => set('round', false)(value === 'round'),
+        ),
+      ),
+      slider('Leistung', {
+        min: -50,
+        max: 150,
+        value: toSlider(light.power),
+        format: (value) => numberFormat.format(fromSlider(value)),
+        oninput: (value) => set('power')(fromSlider(value)),
+      }),
+      field(
+        'Farbe',
+        h('input', {
+          type: 'color',
+          value: light.color,
+          oninput: (event) => set('color')(event.target.value),
+        }),
+      ),
+      h(
+        'button',
+        {
+          class: 'danger',
+          onclick: () => {
+            state.lighting.lights = state.lighting.lights.filter((other) => other !== light);
+            select('lighting');
+          },
+        },
+        'Softbox löschen',
+      ),
     ],
   };
 }
@@ -1115,6 +1222,10 @@ export function renderPanel(container, context) {
     panel = entry ? materialPanel(entry, context) : null;
   } else if (key === 'scene') panel = scenePanel(context);
   else if (key === 'lighting') panel = lightingPanel(context);
+  else if (kind === 'light') {
+    const light = state.lighting.lights.find((item) => item.id === id);
+    panel = light ? lightPanel(light, context) : null;
+  }
   else if (key === 'views') panel = viewsPanel(context);
   else if (kind === 'view') {
     const view = state.views.find((item) => item.id === id);

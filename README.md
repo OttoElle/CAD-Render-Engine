@@ -18,6 +18,7 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 6:** Schnittansichten mit geschlossenen Schnittflächen
 - [x] **Schritt 7:** Material-Feintuning mit Reglern, gebürsteten und gedrehten
   Oberflächen und erweiterter Bibliothek
+- [x] **Schritt 8:** Einzelne Softboxen, weitere Lichtvorlagen und Belichtung
 
 ## Ablauf
 
@@ -49,8 +50,14 @@ die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
    Drehachse ergibt sich automatisch aus der Form des Bauteils oder wird als
    Achse gewählt.
 5. **Szene:** Hintergrundfarbe und Boden mit Schatten.
-6. **Beleuchtung:** Lichtvorlage oder eigene HDRI-Datei (.hdr, .exr), Drehung und Helligkeit.
-   Eine HDRI-Datei lässt sich auch einfach ins Fenster ziehen.
+6. **Beleuchtung:** Lichtvorlage (fünf Studio-Aufbauten, Tageslicht, bewölkter
+   Himmel, Werkhalle) oder eigene HDRI-Datei (.hdr, .exr), Drehung und
+   Belichtung in Blendenstufen. Eine HDRI-Datei lässt sich auch einfach ins
+   Fenster ziehen. Die Softboxen einer Vorlage stehen als Einträge darunter
+   und lassen sich einzeln verschieben, vergrößern, färben, dimmen und
+   ausschalten. Das Plus legt weitere an, auch über einer HDRI-Datei.
+   „Glanzlicht setzen“ richtet eine Softbox so aus, dass ihr Glanzlicht genau
+   auf dem angeklickten Punkt des Modells liegt.
 7. **Perspektive:** Brennweite oder Parallelprojektion, Kamera in Zahlen
    (Drehung, Höhe, Rollen, Abstand, Drehpunkt) und Tiefenunschärfe mit Blende
    und wählbarem Fokuspunkt. Das Plus speichert die aktuelle Ansicht.
@@ -114,8 +121,9 @@ Testmodell liegt unter `samples/Bracket.step`.
 - `src/viewer.js` ist die Echtzeit-Ansicht (WebGL) mit Kamera, Boden und
   Bildausschnitt, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.
 - `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen.
-- `src/materials.js` enthält die Materialbibliothek, `src/environment.js`
-  erzeugt die Lichtvorlagen als HDR-Umgebung direkt im Code.
+- `src/materials.js` enthält die Materialbibliothek und die Schliffbilder,
+  `src/environment.js` erzeugt die Lichtvorlagen und Softboxen als
+  HDR-Umgebung direkt im Code.
 - `src/render.js` rendert das Endbild mit
   [three-gpu-pathtracer](https://github.com/gkjohnson/three-gpu-pathtracer)
   auf WebGPU in einer eigenen, unsichtbaren Zeichenfläche.

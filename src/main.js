@@ -3,7 +3,7 @@ import { Viewer } from './viewer.js';
 import { ViewCube } from './viewcube.js';
 import { loadStepFile } from './step-loader.js';
 import { getMaterialDef, resolveLook } from './materials.js';
-import { loadHdriFile } from './environment.js';
+import { loadHdriFile, getLightPreset, presetLights, newLight } from './environment.js';
 import {
   initProjects,
   currentRecord,
@@ -37,6 +37,7 @@ import {
   emit,
   select,
   newId,
+  withIds,
   resetForModel,
   resetForProject,
   addMaterial,
@@ -74,6 +75,8 @@ let panelLive = null;
 let projectToken = 0;
 /** While true, the next click on the model sets the focus point for the depth of field. */
 let pickingFocus = false;
+/** Softbox that the next click on the model places, so that its reflection lands on the clicked point. */
+let pickingHighlight = null;
 /** Part highlighted by a click in the viewport, kept while the pointer leaves the tree. */
 let clickHighlight = [];
 
@@ -109,6 +112,7 @@ function applyMaterials() {
 function applySceneAndLighting() {
   viewer.setLighting({
     presetId: state.lighting.presetId,
+    lights: state.lighting.lights,
     rotation: state.lighting.rotation,
     intensity: state.lighting.intensity,
     ground: state.scene.ground,
@@ -229,7 +233,26 @@ function updateFocusMarker() {
 
 function setPickingFocus(value) {
   pickingFocus = value;
-  viewer.canvas.classList.toggle('picking', value);
+  if (value) pickingHighlight = null;
+  viewer.canvas.classList.toggle('picking', value || pickingHighlight !== null);
+}
+
+function setPickingHighlight(light) {
+  pickingHighlight = light;
+  if (light) pickingFocus = false;
+  viewer.canvas.classList.toggle('picking', light !== null || pickingFocus);
+}
+
+/**
+ * Moves a softbox so that its reflection appears at a point on the model, as
+ * seen from the current camera: the light goes where the view ray bounces to.
+ */
+function placeHighlight(light, point, normal) {
+  const toCamera = viewer.camera.position.clone().sub(point).normalize();
+  const reflected = normal.clone().multiplyScalar(2 * normal.dot(toCamera)).sub(toCamera).normalize();
+  const azimuth = (Math.atan2(reflected.x, reflected.z) * 180) / Math.PI - state.lighting.rotation;
+  light.az = Math.round((((azimuth + 180) % 360) + 360) % 360 - 180);
+  light.el = Math.round(Math.min(Math.max((Math.asin(reflected.y) * 180) / Math.PI, -30), 90));
 }
 
 // --- Renderings ---------------------------------------------------------------
@@ -430,6 +453,7 @@ async function restoreHdri(token) {
   if (!loaded) {
     state.lighting.presetId = 'studio-soft';
     state.lighting.hdriName = null;
+    state.lighting.lights = withIds(presetLights(getLightPreset('studio-soft')));
     if (state.scene.background === 'environment') state.scene.background = 'light';
   }
   emit('lighting');
@@ -615,6 +639,25 @@ const actions = {
   },
   hover: (ids) => viewer.setHighlight(ids ?? selectionHighlight()),
   loadHdri: () => hdriInput.click(),
+  addLight: () => {
+    const names = state.lighting.lights.map((light) => light.name);
+    let number = state.lighting.lights.length + 1;
+    while (names.includes(`Softbox ${number}`)) number += 1;
+    const [light] = withIds([newLight(`Softbox ${number}`)]);
+    state.lighting.lights.push(light);
+    select(`light:${light.id}`);
+  },
+  toggleLight: (id) => {
+    const light = state.lighting.lights.find((item) => item.id === id);
+    if (!light) return;
+    light.enabled = !light.enabled;
+    emit('lighting');
+  },
+  pickHighlight: (light) => {
+    setPickingHighlight(pickingHighlight === light ? null : light);
+    emit('lighting');
+  },
+  isPickingHighlight: (light) => pickingHighlight === light,
   pickFocus: () => {
     setPickingFocus(!pickingFocus);
     emit('camera');
@@ -642,6 +685,7 @@ function refresh(what) {
   if (what === 'selection') {
     clickHighlight = [];
     if (pickingFocus && state.selected !== 'views') setPickingFocus(false);
+    if (pickingHighlight && state.selected !== `light:${pickingHighlight.id}`) setPickingHighlight(null);
     const [kind, idText] = state.selected.split(':');
     if (kind === 'view') {
       const view = state.views.find((item) => item.id === Number(idText));
@@ -672,7 +716,17 @@ viewer.onViewChange = () => {
   scheduleSave();
 };
 
-viewer.onPartClick = (partId, point) => {
+viewer.onPartClick = (partId, point, normal) => {
+  if (pickingHighlight) {
+    if (!point) return;
+    placeHighlight(pickingHighlight, point, normal);
+    if (pickingHighlight.el < 0 && state.scene.ground && !state.output.transparent) {
+      setStatus('Das Licht liegt unter dem Horizont und wird im Rendering vom Boden verdeckt.', { timeout: 5000 });
+    }
+    setPickingHighlight(null);
+    emit('lighting');
+    return;
+  }
   if (pickingFocus) {
     if (!point) return;
     state.camera.focusPoint = point.toArray();
@@ -728,6 +782,8 @@ async function openHdri(file) {
   setStatus(`Lade ${file.name} …`);
   try {
     viewer.setCustomEnvironment(await loadHdriFile(file));
+    // The softboxes of a preset do not belong into a photographed environment.
+    if (state.lighting.presetId !== 'custom') state.lighting.lights = [];
     state.lighting.presetId = 'custom';
     state.lighting.hdriName = file.name;
     files.put(fileKeys.hdri(state.project.id), file);
@@ -786,6 +842,7 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'e' || event.key === 'E') toggleEdges();
   if (event.key === 'Escape') {
     if (pickingFocus) actions.pickFocus();
+    if (pickingHighlight) actions.pickHighlight(pickingHighlight);
     clickHighlight = [];
     viewer.setHighlight(selectionHighlight());
   }

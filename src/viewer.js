@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createMaterial, finishFrame, applyFinishTangents } from './materials.js';
-import { buildEnvironmentTexture, getLightPreset, keyLightDirection, CUSTOM_SHADOW } from './environment.js';
+import { buildEnvironmentTexture, getLightPreset, CUSTOM_SHADOW } from './environment.js';
 import { buildCap } from './section.js';
 
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
@@ -366,24 +366,31 @@ export class Viewer {
     return this.lighting.background === 'environment';
   }
 
-  /** Changes any subset of the lighting settings (preset, rotation, intensity, ground, background). */
+  /** Changes any subset of the lighting settings (preset, lights, rotation, intensity, ground, background). */
   setLighting(changes) {
     Object.assign(this.lighting, changes);
     const custom = this.lighting.presetId === 'custom' && this._customEnvironment;
     const preset = getLightPreset(this.lighting.presetId);
-    const key = custom ? this._customEnvironment.uuid : preset.id;
+    // Only what changes the picture; renaming a softbox must not rebuild the environment.
+    const lights = (this.lighting.lights || [])
+      .filter((light) => light.enabled && light.power > 0)
+      .map(({ az, el, width, height, power, color, round }) => ({ az, el, width, height, power, color, round, enabled: true }));
+    const key = `${custom ? this._customEnvironment.uuid : preset.id}|${JSON.stringify(lights)}`;
 
     if (key !== this._environmentKey) {
       this._environmentKey = key;
-      // Procedural textures are rebuilt on demand; a custom HDRI is kept for reuse.
+      // Generated textures are rebuilt on demand; a custom HDRI is kept for reuse.
       if (this.environmentTexture && this.environmentTexture !== this._customEnvironment) {
         this.environmentTexture.dispose();
       }
       this._envTarget?.dispose();
-      this.environmentTexture = custom ? this._customEnvironment : buildEnvironmentTexture(preset);
+      this.environmentTexture =
+        custom && lights.length === 0
+          ? this._customEnvironment
+          : buildEnvironmentTexture(custom ? this._customEnvironment : preset, lights);
       this._envTarget = this._pmrem.fromEquirectangular(this.environmentTexture);
       this.scene.environment = this._envTarget.texture;
-      this._keyDirection = custom ? this._customEnvironment.userData.keyDirection.clone() : keyLightDirection(preset);
+      this._keyDirection = this.environmentTexture.userData.keyDirection.clone();
       this._shadowSettings = custom ? CUSTOM_SHADOW : preset.shadow;
     }
 
@@ -774,7 +781,13 @@ export class Viewer {
           (plane) => plane.distanceToPoint(candidate.point) >= 0,
         ),
       );
-    this.onPartClick?.(hit ? hit.object.userData.partId : null, hit ? hit.point.clone() : null);
+    let normal = null;
+    if (hit?.face) {
+      // Parts are double sided, so the hit may be on the back of a face.
+      normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+      if (normal.dot(this._raycaster.ray.direction) > 0) normal.negate();
+    }
+    this.onPartClick?.(hit ? hit.object.userData.partId : null, hit ? hit.point.clone() : null, normal);
   }
 
   _resize() {

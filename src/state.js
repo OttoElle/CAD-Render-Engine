@@ -1,7 +1,25 @@
 import { getMaterialDef, defaultTuning } from './materials.js';
+import { getLightPreset, presetLights } from './environment.js';
+
+let nextId = 1;
+
+export function newId() {
+  return nextId++;
+}
+
+/** Gives stored or preset items the runtime ids the tree uses. */
+export function withIds(items) {
+  return items.map((item) => ({ ...item, id: newId() }));
+}
 
 export const defaultScene = () => ({ background: 'light', ground: true });
-export const defaultLighting = () => ({ presetId: 'studio-soft', rotation: 0, intensity: 1, hdriName: null });
+export const defaultLighting = () => ({
+  presetId: 'studio-soft',
+  rotation: 0,
+  intensity: 1,
+  hdriName: null,
+  lights: withIds(presetLights(getLightPreset('studio-soft'))),
+});
 export const defaultCamera = () => ({ dof: false, fStop: 4, focusPoint: null });
 export const defaultSectionCap = () => ({ mode: 'material', color: '#d9534f' });
 export const defaultOutput = () => ({
@@ -42,7 +60,11 @@ export const state = {
   materials: [],
   /** `background` is 'light', 'grey', 'white', 'dark', 'environment' (show the HDRI) or a hex colour. */
   scene: defaultScene(),
-  /** `hdriName` is set while a user-supplied HDRI file is loaded (presetId 'custom'). */
+  /**
+   * `hdriName` is set while a user-supplied HDRI file is loaded (presetId 'custom').
+   * `lights` are the softboxes on top of the preset or HDRI: { id, name, az, el, width, height, power, color, round, enabled }.
+   * `intensity` scales all light; the panel shows it as exposure in EV.
+   */
   lighting: defaultLighting(),
   /** Lens settings that only show in the final rendering. `focusPoint` is a world position or null (pivot). */
   camera: defaultCamera(),
@@ -77,7 +99,6 @@ export const RENDER_DEVICES = {
 };
 
 const listeners = new Set();
-let nextId = 1;
 
 export function subscribe(listener) {
   listeners.add(listener);
@@ -88,9 +109,6 @@ export function emit(what) {
   for (const listener of listeners) listener(what);
 }
 
-export function newId() {
-  return nextId++;
-}
 
 export function select(key) {
   state.selected = key;

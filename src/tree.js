@@ -1,6 +1,7 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { state, select, materialEntryLabel } from './state.js';
+import { getLightPreset } from './environment.js';
 
 /** Keys of nodes whose children are folded away. */
 const collapsed = new Set();
@@ -109,7 +110,25 @@ export function renderTree(container, actions) {
       ],
     },
     { key: 'scene', label: 'Szene', status: loaded ? 'ok' : null },
-    { key: 'lighting', label: 'Beleuchtung', status: loaded ? 'ok' : null },
+    {
+      key: 'lighting',
+      label: 'Beleuchtung',
+      count: state.lighting.lights.length,
+      detail: state.lighting.presetId === 'custom' ? state.lighting.hdriName : getLightPreset(state.lighting.presetId).label,
+      status: loaded ? 'ok' : null,
+      plus: { title: 'Softbox anlegen', run: actions.addLight },
+      children: state.lighting.lights.map((light) => ({
+        key: `light:${light.id}`,
+        label: light.name,
+        dimmed: !light.enabled,
+        action: {
+          icon: light.enabled ? 'eye' : 'eyeOff',
+          title: light.enabled ? 'Ausschalten' : 'Einschalten',
+          sticky: !light.enabled,
+          run: () => actions.toggleLight(light.id),
+        },
+      })),
+    },
     {
       key: 'views',
       label: 'Perspektive',
