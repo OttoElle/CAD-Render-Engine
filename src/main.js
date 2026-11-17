@@ -1,6 +1,8 @@
 import { Euler, MathUtils, Quaternion, Vector3 } from 'three';
 import { Viewer } from './viewer.js';
 import { drawGuides, loadGuides, saveGuides } from './guides.js';
+import { SHORTCUT_ACTIONS, shortcutFor, shortcutLabel } from './shortcuts.js';
+import { renderSettings, isRecordingShortcut } from './settings.js';
 import { ViewCube } from './viewcube.js';
 import { loadStepFile } from './step-loader.js';
 import { getMaterialDef, resolveLook } from './materials.js';
@@ -63,6 +65,7 @@ import {
   resetForModel,
   resetForProject,
   addMaterial,
+  removeMaterial,
   materialEntryOf,
   setPartsAssigned,
   defaultAdjust,
@@ -116,6 +119,9 @@ let pendingSnapshot = null;
 /** Part whose move gizmo is shown, or null. */
 let gizmoPart = null;
 let gizmoMode = 'translate';
+/** Whether the app settings are open. */
+let settingsOpen = false;
+const settingsEl = $('#settings');
 
 $('#fit-btn').append(icon('fit', 16), 'Fit');
 edgesBtn.append(icon('edges', 16), 'Edges');
@@ -431,7 +437,7 @@ function duplicateJob(job) {
 function deleteJob(job) {
   state.jobs = state.jobs.filter((other) => other !== job);
   panelSnapshot = null;
-  select('output');
+  select('');
 }
 
 // --- Renderings ---------------------------------------------------------------
@@ -495,7 +501,7 @@ function queueRender(job) {
 function canRender() {
   if (state.parts.length === 0) return false;
   if (!isRenderSupported()) {
-    select('renders');
+    setStatus('Rendering needs WebGPU. Please use Chrome or Edge.', { error: true, timeout: 6000 });
     return false;
   }
   return true;
@@ -514,9 +520,10 @@ function renderJob(job) {
 /** Puts all render jobs into the queue, in their order. */
 function renderAllJobs() {
   if (!canRender() || state.jobs.length === 0) return;
-  for (const job of state.jobs) queueRender(job);
+  const first = state.jobs.map((job) => queueRender(job))[0];
   panelSnapshot = null;
-  select('renders');
+  if (!runningRender()) select(`render:${first.id}`);
+  else emit('renders');
   runQueue();
 }
 
@@ -750,7 +757,8 @@ function deleteRender(render) {
   for (const frame of render.frames) URL.revokeObjectURL(frame.url);
   if (render.stored) deleteRenderFiles(state.project.id, renderMeta(render));
   state.renders = state.renders.filter((other) => other !== render);
-  select('renders');
+  if (state.selected === `render:${render.id}`) select('');
+  else emit('renders');
 }
 
 /** Base of all file names: the project's name, or the model's. */
@@ -1272,6 +1280,16 @@ function discardPanel() {
   emit('model');
 }
 
+/** Deletes something from the tree's menu; its panel closes if it was open, and the deletion stays. */
+function deleteFromTree(key, area, run) {
+  run();
+  if (state.selected === key) {
+    panelSnapshot = null;
+    select('');
+  }
+  emit(area);
+}
+
 /** Creates a project, optionally with the settings of a template, and opens it. */
 async function newProject(name, templateId = null) {
   saveNow();
@@ -1457,6 +1475,20 @@ const actions = {
     state.lighting.lights.push(light);
     select(`light:${light.id}`);
   },
+  deleteSection: (id) =>
+    deleteFromTree(`section:${id}`, 'sections', () => {
+      state.sections = state.sections.filter((item) => item.id !== id);
+    }),
+  deleteMaterial: (id) => deleteFromTree(`material:${id}`, 'materials', () => removeMaterial(id)),
+  deleteLight: (id) =>
+    deleteFromTree(`light:${id}`, 'lighting', () => {
+      state.lighting.lights = state.lighting.lights.filter((item) => item.id !== id);
+    }),
+  deleteView: (id) =>
+    deleteFromTree(`view:${id}`, 'views', () => {
+      state.views = state.views.filter((item) => item.id !== id);
+    }),
+  lensText: () => (viewer.parallel ? 'parallel' : `${Math.round(viewer.focalLength)} mm`),
   toggleLight: (id) => {
     const light = state.lighting.lights.find((item) => item.id === id);
     if (!light) return;
@@ -1538,6 +1570,7 @@ function refresh(what) {
   updateOutputFrame();
   updateRenderView();
   updateFocusMarker();
+  if (settingsOpen && !live) drawSettings();
 }
 
 subscribe(refresh);
@@ -1603,10 +1636,10 @@ viewer.onPartClick = (partId, point, normal) => {
 
   // Around the geometry step a click opens the part; elsewhere it only points it out,
   // so the panel being worked in stays open.
-  const browsing = ['', 'geometry', 'parts', 'part', 'materials'].includes(kind) || state.selected === 'material:cad';
+  const browsing = ['', 'geometry', 'part', 'explode'].includes(kind) || state.selected === 'material:cad';
   if (browsing) {
     if (partId !== null) select(`part:${partId}`);
-    else if (kind === 'part') select('geometry');
+    else if (kind === 'part') select('');
     return;
   }
   clickHighlight = partId === null ? [] : [partId];
@@ -1717,6 +1750,37 @@ function setGuides(changes) {
 }
 guidesBtn.addEventListener('click', () => setGuides({ visible: !guides.visible }));
 
+/** Tooltips of the toolbar name the current keys. */
+function updateShortcutTitles() {
+  const buttons = { fit: '#fit-btn', edges: '#edges-btn', axes: '#axes-btn', guides: '#guides-btn' };
+  for (const [action, selector] of Object.entries(buttons)) {
+    $(selector).title = `${SHORTCUT_ACTIONS[action].label} (${shortcutLabel(action)})`;
+  }
+}
+updateShortcutTitles();
+
+// --- App settings -------------------------------------------------------------
+
+$('#settings-btn').append(icon('gear', 18));
+$('#settings-btn').addEventListener('click', () => showSettings(!settingsOpen));
+
+function showSettings(open) {
+  settingsOpen = open;
+  settingsEl.hidden = !open;
+  if (open) drawSettings();
+  else settingsEl.replaceChildren();
+}
+
+function drawSettings() {
+  renderSettings(settingsEl, {
+    onClose: () => showSettings(false),
+    onChange: () => {
+      updateShortcutTitles();
+      emit('selection');
+    },
+  });
+}
+
 window.addEventListener('keydown', (event) => {
   const tag = event.target.tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || event.metaKey || event.ctrlKey) return;
@@ -1727,10 +1791,16 @@ window.addEventListener('keydown', (event) => {
     }
     return;
   }
-  if (event.key === 'f' || event.key === 'F') viewer.fit();
-  if (event.key === 'e' || event.key === 'E') toggleEdges();
-  if (event.key === 'a' || event.key === 'A') toggleAxes();
-  if (event.key === 'g' || event.key === 'G') setGuides({ visible: !guides.visible });
+  if (isRecordingShortcut()) return;
+  if (settingsOpen) {
+    if (event.key === 'Escape') showSettings(false);
+    return;
+  }
+  const shortcut = shortcutFor(event.key);
+  if (shortcut === 'fit') viewer.fit();
+  if (shortcut === 'edges') toggleEdges();
+  if (shortcut === 'axes') toggleAxes();
+  if (shortcut === 'guides') setGuides({ visible: !guides.visible });
   if (event.key === 'Escape') {
     if (pickingFocus) actions.pickFocus();
     if (pickingHighlight) actions.pickHighlight(pickingHighlight);

@@ -1,7 +1,9 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
-import { state, select, materialEntryLabel } from './state.js';
+import { openMenu } from './menu.js';
+import { state, select, materialEntryLabel, BACKGROUND_COLORS } from './state.js';
 import { getLightPreset } from './environment.js';
+import { FILE_FORMATS } from './export.js';
 
 /** Keys of nodes whose children are folded away. */
 const collapsed = new Set();
@@ -11,28 +13,39 @@ export function setCollapsed(key, value) {
   else collapsed.delete(key);
 }
 
-function statusIcon(status) {
-  if (!status) return h('span', { class: 'node-status none' });
-  // The tree is rebuilt with every progress update; starting the spin where the clock
-  // stands keeps it turning smoothly instead of jumping back to the start.
-  const style = status === 'running' ? { animationDelay: `-${Math.round(performance.now() % 900)}ms` } : null;
-  return h('span', { class: `node-status ${status}`, style }, status === 'ok' ? icon('check', 11) : null);
-}
-
 const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
 
+const FLOOR_NAMES = { shadow: 'Flat', cove: 'Cove', none: 'None' };
+
+function backgroundName(scene) {
+  if (scene.background === 'environment') return 'Scene';
+  if (scene.background === 'gradient') return 'Gradient';
+  if (scene.background.startsWith('#')) return scene.background.toUpperCase();
+  return BACKGROUND_COLORS[scene.background] || '';
+}
+
 /**
- * Renders the guided tree. `actions` supplies what the buttons do: openFile,
- * addSection, toggleSection, addMaterial, addLight, addView, addJob, togglePart and hover (tints
- * parts in the model while the pointer is over their row).
+ * Renders the tree. Categories are titles: a click folds them, their buttons
+ * add things or act on all their entries. Entries open their settings.
+ * `actions` supplies what the buttons do (see main.js).
  */
 export function renderTree(container, actions) {
   const loaded = state.parts.length > 0;
-  const unassigned = state.parts.filter(
-    (part) => !state.materials.some((entry) => entry.partIds.has(part.id)),
-  ).length;
+  const unassigned = state.parts.filter((part) => !state.materials.some((entry) => entry.partIds.has(part.id))).length;
+  const hiddenParts = state.parts.filter((part) => !part.mesh.visible).length;
+  const doneRenders = state.renders.filter((render) => render.status === 'done').length;
+  const queued = state.renders.filter((render) => render.status === 'queued').length;
 
-  const renderStatus = (render) =>
+  const eye = (visible, titles, run) => ({
+    icon: visible ? 'eye' : 'eyeOff',
+    title: visible ? titles[0] : titles[1],
+    sticky: !visible,
+    run,
+  });
+  const more = (items) => ({ icon: 'more', title: 'More', menu: items });
+  const remove = (label, run) => ({ label, icon: 'trash', danger: true, run });
+
+  const renderDetail = (render) =>
     render.status === 'running'
       ? `${Math.round(render.progress * 100)} %`
       : render.status === 'queued'
@@ -45,212 +58,310 @@ export function renderTree(container, actions) {
 
   const nodes = [
     {
-      key: 'geometry',
-      label: 'Geometry',
-      detail: loaded ? state.fileName : null,
-      status: loaded ? 'ok' : 'todo',
-      plus: { title: 'Open STEP file', run: actions.openFile },
+      key: 'cat:geometry',
+      category: true,
       always: true,
-      children: loaded
-        ? [
-            {
-              key: 'parts',
-              label: 'Parts',
-              count: state.parts.length,
-              children: state.parts.map((part) => {
-                const visible = part.mesh.visible;
-                return {
+      label: 'Geometry',
+      icon: 'cube',
+      actions: [
+        loaded
+          ? { icon: 'plus', title: 'Add section', run: actions.addSection, add: true }
+          : { icon: 'plus', title: 'Open STEP file', run: actions.openFile, add: true },
+      ],
+      children: [
+        {
+          key: 'geometry',
+          always: true,
+          label: loaded ? state.fileName : 'Open a STEP file',
+          icon: 'file',
+          muted: !loaded,
+          detail: loaded ? `${state.upAxis.replace('+', '')} up` : null,
+        },
+        ...(loaded
+          ? [
+              {
+                key: 'parts',
+                group: true,
+                label: 'Parts',
+                icon: 'partGroup',
+                detail: hiddenParts > 0 ? `${hiddenParts} of ${state.parts.length} hidden` : String(state.parts.length),
+                actions: hiddenParts > 0 ? [{ icon: 'eyeOff', title: 'Show all parts', sticky: true, run: actions.showAllParts }] : [],
+                children: state.parts.map((part) => ({
                   key: `part:${part.id}`,
                   label: part.label,
                   swatch: part.colorHex,
-                  dimmed: !visible,
+                  dimmed: !part.mesh.visible,
                   hover: [part.id],
-                  action: {
-                    icon: visible ? 'eye' : 'eyeOff',
-                    title: visible ? 'Hide' : 'Show',
-                    sticky: !visible,
-                    run: () => actions.togglePart(part.id),
-                  },
-                };
-              }),
-            },
-            {
-              key: 'sections',
-              label: 'Sections',
-              count: state.sections.length,
-              plus: { title: 'Add section', run: actions.addSection },
-              children: state.sections.map((section) => ({
+                  actions: [eye(part.mesh.visible, ['Hide', 'Show'], () => actions.togglePart(part.id))],
+                })),
+              },
+              state.parts.length > 1
+                ? {
+                    key: 'explode',
+                    label: 'Exploded view',
+                    icon: 'explode',
+                    detail: state.explode.amount > 0 ? `${Math.round(state.explode.amount * 100)} %` : 'off',
+                    muted: !(state.explode.amount > 0),
+                  }
+                : null,
+              ...state.sections.map((section) => ({
                 key: `section:${section.id}`,
                 label: section.name,
+                icon: 'slice',
                 detail: `${'XYZ'[section.axis]} ${Math.round(section.position * 10) / 10} mm`,
                 dimmed: !section.enabled,
-                action: {
-                  icon: section.enabled ? 'eye' : 'eyeOff',
-                  title: section.enabled ? 'Turn section off' : 'Turn section on',
-                  sticky: !section.enabled,
-                  run: () => actions.toggleSection(section.id),
-                },
+                actions: [
+                  eye(section.enabled, ['Turn section off', 'Turn section on'], () => actions.toggleSection(section.id)),
+                  more([remove('Delete section', () => actions.deleteSection(section.id))]),
+                ],
               })),
-            },
-          ]
-        : [],
-    },
-    {
-      key: 'materials',
-      label: 'Materials',
-      count: state.materials.length,
-      status: loaded ? 'ok' : null,
-      plus: { title: 'Add material', run: actions.addMaterial },
-      children: [
-        ...state.materials.map((entry) => ({
-          key: `material:${entry.id}`,
-          label: materialEntryLabel(entry),
-          detail: plural(entry.partIds.size, 'part', 'parts'),
-          swatch: entry.colorHex,
-          warn: entry.partIds.size === 0,
-          hover: [...entry.partIds],
-        })),
-        ...(loaded && unassigned > 0
-          ? [
-              {
-                key: 'material:cad',
-                label: 'CAD colours',
-                detail: plural(unassigned, 'part', 'parts'),
-                muted: true,
-              },
             ]
           : []),
       ],
     },
-    { key: 'scene', label: 'Scene', status: loaded ? 'ok' : null },
     {
-      key: 'lighting',
-      label: 'Lighting',
-      count: state.lighting.lights.length,
-      detail: state.lighting.presetId === 'custom' ? state.lighting.hdriName : getLightPreset(state.lighting.presetId).label,
-      status: loaded ? 'ok' : null,
-      plus: { title: 'Add softbox', run: actions.addLight },
-      children: state.lighting.lights.map((light) => ({
-        key: `light:${light.id}`,
-        label: light.name,
-        dimmed: !light.enabled,
-        action: {
-          icon: light.enabled ? 'eye' : 'eyeOff',
-          title: light.enabled ? 'Turn off' : 'Turn on',
-          sticky: !light.enabled,
-          run: () => actions.toggleLight(light.id),
+      key: 'cat:materials',
+      category: true,
+      label: 'Materials',
+      icon: 'palette',
+      actions: [{ icon: 'plus', title: 'Add material', run: actions.addMaterial, add: true }],
+      children: [
+        {
+          key: 'material:cad',
+          label: 'CAD colours',
+          swatch: 'linear-gradient(135deg, #c9ced6 50%, #7d8794 50%)',
+          detail: plural(unassigned, 'part', 'parts'),
+          muted: unassigned === 0,
         },
-      })),
+        ...state.materials.map((entry) => ({
+          key: `material:${entry.id}`,
+          label: materialEntryLabel(entry),
+          swatch: entry.colorHex,
+          round: true,
+          detail: entry.partIds.size > 0 ? plural(entry.partIds.size, 'part', 'parts') : null,
+          warning: entry.partIds.size === 0 ? 'No parts assigned yet' : null,
+          hover: [...entry.partIds],
+          actions: [more([remove('Delete material', () => actions.deleteMaterial(entry.id))])],
+        })),
+      ],
     },
     {
-      key: 'views',
+      key: 'cat:scene',
+      category: true,
+      label: 'Scene',
+      icon: 'scene',
+      children: [
+        { key: 'scene:background', label: 'Background', icon: 'background', detail: backgroundName(state.scene) },
+        {
+          key: 'scene:floor',
+          label: 'Floor',
+          icon: 'floor',
+          detail: state.scene.background === 'environment' ? 'from the scene' : FLOOR_NAMES[state.scene.floor],
+          muted: state.scene.background === 'environment',
+        },
+      ],
+    },
+    {
+      key: 'cat:lighting',
+      category: true,
+      label: 'Lighting',
+      icon: 'lamp',
+      actions: [{ icon: 'plus', title: 'Add softbox', run: actions.addLight, add: true }],
+      children: [
+        {
+          key: 'lighting',
+          label: 'Light setup',
+          icon: 'sliders',
+          detail: state.lighting.presetId === 'custom' ? state.lighting.hdriName : getLightPreset(state.lighting.presetId).label,
+        },
+        ...state.lighting.lights.map((light) => ({
+          key: `light:${light.id}`,
+          label: light.name,
+          icon: 'softbox',
+          dimmed: !light.enabled,
+          warning: light.enabled && light.el < 0 ? 'Below the horizon: the floor hides this light in the rendering' : null,
+          actions: [
+            eye(light.enabled, ['Turn off', 'Turn on'], () => actions.toggleLight(light.id)),
+            more([remove('Delete softbox', () => actions.deleteLight(light.id))]),
+          ],
+        })),
+      ],
+    },
+    {
+      key: 'cat:camera',
+      category: true,
       label: 'Camera',
-      count: state.views.length,
-      status: loaded ? 'ok' : null,
-      plus: { title: 'Save current view', run: actions.addView },
-      children: state.views.map((view) => ({ key: `view:${view.id}`, label: view.name })),
+      icon: 'camera',
+      actions: [{ icon: 'plus', title: 'Save the current view', run: actions.addView, add: true }],
+      children: [
+        { key: 'views', label: 'Lens', icon: 'lens', detail: actions.lensText() },
+        ...state.views.map((view) => ({
+          key: `view:${view.id}`,
+          label: view.name,
+          icon: 'bookmark',
+          actions: [
+            { icon: 'play', title: 'Show this view', run: () => actions.showView(view) },
+            more([remove('Delete view', () => actions.deleteView(view.id))]),
+          ],
+        })),
+      ],
     },
     {
-      key: 'output',
+      key: 'cat:output',
+      category: true,
       label: 'Output',
-      count: state.jobs.length,
-      status: loaded ? 'ok' : null,
-      plus: { title: 'Add render job', run: actions.addJob },
-      children: state.jobs.map((job) => ({
-        key: `job:${job.id}`,
-        label: job.name,
-        detail: job.type === 'animation' ? 'Animation' : 'Image',
-        icon: job.type === 'animation' ? 'film' : 'image',
-      })),
+      icon: 'clapper',
+      actions: [
+        state.jobs.length > 0 && actions.renderSupported
+          ? { icon: 'play', title: state.jobs.length > 1 ? `Render all ${state.jobs.length} jobs` : 'Render the job', run: actions.renderAllJobs }
+          : null,
+        {
+          icon: 'plus',
+          title: 'Add render job',
+          add: true,
+          menu: () => [
+            { label: 'Image', icon: 'image', run: () => actions.addJob('image') },
+            { label: 'Turntable', icon: 'film', run: actions.addAnimationJob },
+            state.views.length > 0
+              ? { label: `One image per saved view (${state.views.length})`, icon: 'bookmark', run: actions.jobsFromViews }
+              : null,
+          ].filter(Boolean),
+        },
+      ],
+      empty: 'No render jobs yet',
+      children: state.jobs.map((job) => {
+        const { width, height } = actions.resolveOutputSize(job);
+        return {
+          key: `job:${job.id}`,
+          label: job.name,
+          icon: job.type === 'animation' ? 'film' : 'image',
+          detail: job.type === 'animation' ? `${job.turntableFrames} images` : `${width} × ${height}`,
+          actions: [
+            actions.renderSupported ? { icon: 'play', title: 'Render this job', run: () => actions.renderJob(job) } : null,
+            more([
+              { label: 'Duplicate', icon: 'copy', run: () => actions.duplicateJob(job) },
+              remove('Delete job', () => actions.deleteJob(job)),
+            ]),
+          ],
+        };
+      }),
     },
     {
-      key: 'renders',
+      key: 'cat:renders',
+      category: true,
       label: 'Renders',
-      count: state.renders.length,
-      status: state.renders.some((render) => render.status === 'running')
-        ? 'running'
-        : state.renders.length > 0
-          ? 'ok'
+      icon: 'photos',
+      actions: [
+        doneRenders > 0 || queued > 0
+          ? {
+              icon: 'download',
+              title: 'Save all or clear the queue',
+              menu: () => [
+                ...Object.entries(FILE_FORMATS).map(([key, value]) => ({
+                  label: `Save all as ${value.extension.toUpperCase()} (ZIP)`,
+                  icon: 'download',
+                  disabled: doneRenders === 0,
+                  run: () => actions.saveAllRenders(key),
+                })),
+                queued > 0 ? null : undefined,
+                queued > 0 ? remove(`Clear the queue (${queued})`, actions.cancelQueue) : undefined,
+              ].filter((item) => item !== undefined),
+            }
           : null,
+      ],
+      empty: actions.renderSupported ? 'Rendered images appear here' : 'Rendering needs WebGPU (Chrome or Edge)',
       children: state.renders.map((render) => ({
         key: `render:${render.id}`,
         label: render.name,
-        detail: renderStatus(render),
-        status: render.status === 'running' ? 'running' : render.status === 'done' ? 'ok' : null,
+        icon: render.turntable ? 'film' : 'image',
+        detail: renderDetail(render),
+        progress: render.status === 'running' ? render.progress : null,
+        warning: render.status === 'failed' ? `Failed: ${render.error}` : null,
+        muted: render.status === 'queued' || render.status === 'cancelled',
+        actions: [more([remove(render.status === 'queued' ? 'Take out of the queue' : 'Delete rendering', () => actions.deleteRender(render))])],
       })),
     },
   ];
 
-  const iconButton = (className, spec, enabled = true) =>
+  const actionButton = (spec, enabled) =>
     h(
       'button',
       {
-        class: className,
+        class: ['node-action', spec.sticky ? 'sticky' : '', spec.add ? 'add' : ''].join(' '),
         title: spec.title,
         'aria-label': spec.title,
         disabled: !enabled,
         onclick: (event) => {
           event.stopPropagation();
-          spec.run();
+          if (spec.menu) openMenu(event.currentTarget, typeof spec.menu === 'function' ? spec.menu() : spec.menu);
+          else spec.run();
         },
       },
-      icon(spec.icon, 14),
+      icon(spec.icon, 15),
     );
 
   const renderNode = (node, depth) => {
+    if (!node) return [];
     const enabled = loaded || node.always;
-    const children = node.children || [];
-    const folded = collapsed.has(node.key);
+    const children = (node.children || []).filter(Boolean);
+    const foldable = node.category || node.group;
+    const folded = foldable && collapsed.has(node.key);
+    const toggleFold = () => {
+      setCollapsed(node.key, !folded);
+      renderTree(container, actions);
+    };
+    const activate = () => {
+      if (!enabled) return;
+      if (foldable) toggleFold();
+      else select(node.key);
+    };
+    const statusIcon = node.progress !== null && node.progress !== undefined
+      ? h('span', { class: 'progress-ring', style: { '--p': `${Math.round(node.progress * 100)}%` }, title: 'Rendering' })
+      : node.warning
+        ? h('span', { class: 'node-warning', title: node.warning }, icon('alert', 14))
+        : null;
     const row = h(
       'div',
       {
         class: [
           'node',
-          `depth-${depth}`,
+          node.category ? 'category' : `depth-${depth}`,
           state.selected === node.key ? 'selected' : '',
           enabled ? '' : 'disabled',
           node.muted ? 'muted' : '',
           node.dimmed ? 'dimmed' : '',
         ].join(' '),
-        role: 'button',
+        role: foldable ? 'treeitem' : 'button',
+        'aria-expanded': foldable ? String(!folded) : null,
         tabIndex: enabled ? 0 : -1,
-        title: node.detail ? `${node.label} · ${node.detail}` : node.label,
-        onclick: () => enabled && select(node.key),
+        title: node.warning || (node.detail ? `${node.label} · ${node.detail}` : node.label),
+        onclick: activate,
         onmouseenter: node.hover ? () => actions.hover(node.hover) : null,
         onkeydown: (event) => {
-          if (enabled && (event.key === 'Enter' || event.key === ' ')) {
+          if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            select(node.key);
+            activate();
           }
         },
       },
-      depth === 0 || children.length > 0
-        ? children.length > 0
-          ? iconButton('node-toggle', {
-              icon: folded ? 'chevronRight' : 'chevronDown',
-              title: folded ? 'Expand' : 'Collapse',
-              run: () => {
-                setCollapsed(node.key, !folded);
-                renderTree(container, actions);
-              },
-            })
-          : h('span', { class: 'node-toggle' })
-        : null,
-      depth === 0 || node.status ? statusIcon(node.status) : null,
-      node.icon ? h('span', { class: 'node-icon' }, icon(node.icon, 14)) : null,
-      node.swatch ? h('span', { class: 'swatch', style: { background: node.swatch } }) : null,
-      h(
-        'span',
-        { class: 'node-label' },
-        node.label,
-        node.count ? h('span', { class: 'node-count' }, ` (${node.count})`) : null,
-      ),
-      node.detail ? h('span', { class: `node-detail${node.warn ? ' warn' : ''}` }, node.detail) : null,
-      node.action ? iconButton(`node-action${node.action.sticky ? ' sticky' : ''}`, node.action) : null,
-      node.plus ? iconButton('node-plus', { ...node.plus, icon: 'plus' }, enabled) : null,
+      foldable ? h('span', { class: 'node-toggle' }, icon(folded ? 'chevronRight' : 'chevronDown', 14)) : null,
+      node.swatch
+        ? h('span', { class: `swatch${node.round ? ' round' : ''}`, style: { background: node.swatch } })
+        : node.icon
+          ? h('span', { class: 'node-icon' }, icon(node.icon, 16))
+          : null,
+      h('span', { class: 'node-label' }, node.label),
+      node.detail ? h('span', { class: 'node-detail' }, node.detail) : h('span', { class: 'node-fill' }),
+      statusIcon,
+      (node.actions || []).filter(Boolean).map((spec) => actionButton(spec, enabled)),
     );
-    if (folded) return [row];
-    return [row, ...children.flatMap((child) => renderNode(child, depth + 1))];
+    // Without a model only Geometry has something to show.
+    if (folded || !enabled) return [row];
+    const rows = children.flatMap((child) => renderNode(child, node.category ? depth : depth + 1));
+    if (node.category && rows.length === 0 && node.empty && enabled) {
+      rows.push(h('div', { class: 'node depth-0 empty' }, node.empty));
+    }
+    return [row, ...rows];
   };
 
   container.onmouseleave = () => actions.hover(null);

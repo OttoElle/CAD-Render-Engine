@@ -35,6 +35,10 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 15:** Bauteile drehen (Zahlen und Drehringe im Viewport),
   Hilfslinien über dem Bildausschnitt, Rendern läuft im Hintergrund-Tab weiter,
   englische Namen auch in älteren Projekten
+- [x] **Schritt 16:** Neuer Tree (Kategorien als Titel ohne eigenes Panel,
+  keine Häkchen, Schnellaktionen an den Einträgen), einheitlicher Baukasten
+  für alle Panels mit Beschriftung links, Icon-Set, Einstellungen mit
+  Rendering-Gerät und änderbaren Tastenkürzeln
 
 ## Ablauf
 
@@ -55,27 +59,38 @@ eine `.clearcoat`-Datei, „Import“ (oder die Datei ins Fenster ziehen) holt e
 auf einem anderen Rechner wieder herein. Mit mehreren Projekten startet die
 App in der Übersicht.
 
-Die schwebende Seitenleiste führt als Baum durch alle Schritte. Jeder Eintrag
-hat sinnvolle Standardwerte. Ein Klick öffnet die Einstellungen daneben, das
-Plus legt einen neuen Untereintrag an. Oben rechts im Panel übernimmt der
-Haken die Änderungen, das Kreuz verwirft alles, was seit dem Öffnen des Panels
-geändert wurde (ein gerade angelegter Eintrag verschwindet dann wieder).
+Die schwebende Seitenleiste zeigt das Projekt als Baum. Die Kategorien
+(Geometry, Materials, Scene, Lighting, Camera, Output, Renders) sind nur
+Überschriften: ein Klick klappt sie auf und zu, das Plus legt etwas an, ein
+Play-Symbol bei Output rendert alle Jobs, das Download-Symbol bei Renders
+speichert alle Bilder. Ein Klick auf einen Eintrag öffnet seine Einstellungen
+daneben. Beim Überfahren zeigen Einträge ihre Schnellaktionen: Auge zum Ein-
+und Ausblenden, Play zum Rendern oder Anzeigen und „⋯“ für Duplizieren und
+Löschen. Rechts in jeder Zeile steht eine kurze Info; ein oranges Dreieck
+weist auf etwas hin, das Aufmerksamkeit braucht (z. B. ein Material ohne
+Bauteile), ein Ring zeigt den Fortschritt eines Renderings. Oben rechts im
+Panel übernimmt der Haken die Änderungen, das Kreuz verwirft alles, was seit
+dem Öffnen des Panels geändert wurde. Unten im Panel stehen die Aktionen wie
+Rendern, Zurücksetzen und Löschen.
 
-1. **Geometrie (Geometry):** STEP-Datei öffnen (Plus oder Drag-and-drop).
-   Darunter stehen die Bauteile (Parts) und die Schnitte (Sections). Bauteile
-   lassen sich im Baum oder direkt im Modell anklicken; unter dem Mauszeiger
+Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
+(Grafikkarte oder CPU, schonender Modus) und die Tastenkürzel, die sich dort
+ändern lassen. Beides gilt für alle Projekte in diesem Browser.
+
+1. **Geometrie (Geometry):** STEP-Datei öffnen (Eintrag ganz oben oder
+   Drag-and-drop); dieser Eintrag enthält auch Hochachse und Achsen. Darunter
+   stehen die Bauteile (Parts), die Explosionsansicht (Exploded view: Abstand,
+   Richtung und ein Bauteil als Zentrum) und die Schnitte; das Plus legt einen
+   Schnitt an. Bauteile lassen sich im Baum oder direkt im Modell anklicken; unter dem Mauszeiger
    leuchten sie auf. Im Bauteil-Panel stehen Sichtbarkeit, Material,
    Position und Drehung („Position and rotation“: Versatz in X, Y, Z und
    Winkel um die CAD-Achsen, gedreht um die Mitte des Bauteils; mit „Move“
    und „Rotate“ auch per Pfeilen und Ringen im Viewport) und eigene
    Einstellungen für die Explosionsansicht. Schnitte gehen durch die
    Baugruppe, wie sie ausgerichtet ist; verschobene und gedrehte Bauteile
-   werden in derselben Ebene geschnitten wie alle anderen. Unter
-   „Coordinate system“ wird gewählt, welche CAD-Achse nach oben zeigt, und
-   die Achsen lassen sich einblenden (auch über „Axes“ oder `A`).
-   Schnitte: das Plus legt eine Schnittebene an, senkrecht zu einer Achse und
-   per Regler verschiebbar. Die Schnittflächen werden geschlossen, im Material
-   des Bauteils oder in eigener Farbe. Ein Klick auf ein Bauteil im Modell
+   werden in derselben Ebene geschnitten wie alle anderen. Ein Schnitt liegt senkrecht zu einer Achse und ist per Regler verschiebbar.
+   Die Schnittflächen werden geschlossen, im Material des Bauteils oder in
+   eigener Farbe. Ein Klick auf ein Bauteil im Modell
    nimmt es vom Schnitt aus oder schneidet es wieder.
 2. **Materialien (Materials):** Das Plus legt ein Material an. Bauteile
    werden im Modell angeklickt oder in der Liste angehakt; die zugewiesenen
@@ -84,19 +99,17 @@ geändert wurde (ein gerade angelegter Eintrag verschwindet dann wieder).
    Rauheit, Metallisch und Klarlack sowie gebürstete und gedrehte Oberflächen
    passen jedes Material an; „Reset to defaults“ setzt Farbe und Regler
    jederzeit auf die Werte der Bibliothek zurück.
-3. **Szene (Scene):** Zuerst die Wahl des Hintergrunds: Farbe (hell, weiß,
-   grau, dunkel, eigene Farbe oder Farbverlauf) oder Szene (die
-   Lichtumgebung bzw. eine HDRI als Hintergrund). Bei einer Farbe folgt die
-   Bodenform (flacher Boden, Hohlkehle oder kein Boden), danach Stärke und
-   Unschärfe der Spiegelung im Boden.
-4. **Beleuchtung (Lighting):** Lichtvorlage oder eigene HDRI-Datei, Drehung
-   und Belichtung in Blendenstufen. Die Softboxen stehen als Einträge
+3. **Szene (Scene):** „Background“: Farbe (hell, weiß, grau, dunkel, eigene
+   Farbe oder Farbverlauf) oder Szene (die Lichtumgebung bzw. eine HDRI als
+   Hintergrund). „Floor“: Bodenform (flacher Boden, Hohlkehle oder kein
+   Boden) sowie Stärke und Unschärfe der Spiegelung.
+4. **Beleuchtung (Lighting):** „Light setup“: Lichtvorlage oder eigene
+   HDRI-Datei, Drehung und Belichtung in Blendenstufen. Die Softboxen stehen als Einträge
    darunter und lassen sich einzeln verschieben, vergrößern, färben, dimmen
    und ausschalten. „Place highlight“ legt das Glanzlicht einer Softbox auf
    den angeklickten Punkt.
-5. **Kamera (Camera):** Brennweite oder Parallelprojektion, Kamera in Zahlen,
-   Tiefenunschärfe und die Explosionsansicht (Abstand, Richtung und ein
-   Bauteil als Zentrum). Das Plus speichert die aktuelle Ansicht.
+5. **Kamera (Camera):** „Lens“: Brennweite oder Parallelprojektion, Kamera in
+   Zahlen und Tiefenunschärfe. Das Plus speichert die aktuelle Ansicht.
 6. **Output:** Hier entstehen Render-Jobs. Ein Job ist ein Bild oder ein
    Drehteller und merkt sich Kamera, Explosionsabstand, Seitenverhältnis,
    Auflösung, Qualität, Dateiformat und Transparenz. Solange ein Job offen
@@ -104,11 +117,11 @@ geändert wurde (ein gerade angelegter Eintrag verschwindet dann wieder).
    „Guides“ oben (oder `G`) blendet Hilfslinien über dem Bildausschnitt ein:
    Drittel, Goldener Schnitt, Raster oder Mitte und Diagonalen; die Art wird
    im Job- und im Kamera-Panel gewählt. Die Linien erscheinen nicht im Bild.
-   Beliebig viele Jobs anlegen (auch einer pro gespeicherter Ansicht), dann
-   „Render all jobs“: alle wandern in die Warteschlange. Der Drehteller dreht
+   Das Plus legt einen Bild- oder Drehteller-Job an (oder einen pro
+   gespeicherter Ansicht), das Play-Symbol schickt alle Jobs in die
+   Warteschlange. Der Drehteller dreht
    das Modell einmal um die senkrechte Achse (24 bis 120 Bilder, eine Umdrehung
-   in 4 bis 12 Sekunden); den Blickwinkel bestimmt die Kamerahöhe. Unter
-   „Rendering device“ stehen Grafikkarte oder CPU und der schonende Modus.
+   in 4 bis 12 Sekunden); den Blickwinkel bestimmt die Kamerahöhe.
 7. **Renderings (Renders):** Fertige Bilder bleiben mit dem Projekt
    gespeichert, auch nach einem Neustart. Im Bildbetrachter lassen sich
    Helligkeit, Kontrast, Sättigung, Wärme und Vignette einstellen; das gilt
@@ -167,6 +180,8 @@ Testmodell liegt unter `samples/Bracket.step`.
 | Koordinatensystem ein- und ausblenden | `A` |
 | Hilfslinien ein- und ausblenden | `G` |
 
+Die vier Tastenkürzel lassen sich unter dem Zahnrad oben rechts ändern.
+
 ## Aufbau
 
 - `src/step-worker.js` liest STEP-Dateien mit OpenCascade (WebAssembly, über
@@ -197,5 +212,7 @@ Testmodell liegt unter `samples/Bracket.step`.
   `src/overview.js` zeigt die Projektübersicht, `src/project-file.js` packt ein Projekt in eine `.clearcoat`-Datei und liest
   sie wieder.
 - `src/state.js` hält alle Einstellungen, `src/tree.js` zeichnet den Baum,
-  `src/panels.js` die Einstellungen zum gewählten Eintrag, `src/main.js`
-  verbindet alles.
+  `src/panels.js` die Einstellungen zum gewählten Eintrag (mit den Bausteinen
+  des UI-Baukastens am Anfang der Datei), `src/menu.js` die kleinen Menüs,
+  `src/settings.js` und `src/shortcuts.js` die App-Einstellungen,
+  `src/main.js` verbindet alles.

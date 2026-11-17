@@ -18,6 +18,7 @@
           <span class="breadcrumb-separator" aria-hidden="true">›</span>
           <button id="project-chip" title="Name and template of this project"></button>
         </nav>
+        <button id="settings-btn" class="icon-button" title="Settings" aria-label="Settings"></button>
       </header>
       <main id="stage">
         <canvas id="viewport"></canvas>
@@ -36,14 +37,15 @@
         </aside>
         <section id="panel" hidden></section>
         <div id="toolbar" hidden>
-          <button id="fit-btn" title="Fit the model into the view (F)"></button>
-          <button id="edges-btn" title="Show or hide edges (E)" aria-pressed="true"></button>
-          <button id="axes-btn" title="Show or hide the coordinate system (A)" aria-pressed="false"></button>
-          <button id="guides-btn" title="Show or hide guide lines over the image area (G)" aria-pressed="false"></button>
+          <button id="fit-btn"></button>
+          <button id="edges-btn" aria-pressed="true"></button>
+          <button id="axes-btn" aria-pressed="false"></button>
+          <button id="guides-btn" aria-pressed="false"></button>
         </div>
         <div id="viewcube-host" hidden></div>
         <section id="overview" hidden></section>
         <div id="status" hidden></div>
+        <div id="settings" hidden></div>
         <input id="file-input" type="file" accept=".step,.stp,.STEP,.STP" hidden />
         <input id="hdri-input" type="file" accept=".hdr,.exr,.HDR,.EXR" hidden />
         <input id="project-input" type="file" accept=".clearcoat" hidden />

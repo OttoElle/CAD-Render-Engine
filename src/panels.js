@@ -18,7 +18,6 @@ import {
   addMaterial,
   materialEntryOf,
   materialEntryLabel,
-  removeMaterial,
   setPartsAssigned,
 } from './state.js';
 import {
@@ -53,12 +52,14 @@ export function identicalParts(part) {
 
 // --- Controls -----------------------------------------------------------------
 
+/** A setting in one row: its name on the left, the control on the right, an optional note under the control. */
 function field(label, control, value) {
   return h(
     'label',
     { class: 'field' },
-    h('span', { class: 'field-label' }, label, value ? h('output', null, value) : null),
+    h('span', { class: 'field-label' }, label),
     control,
+    value ? h('span', { class: 'field-note' }, value) : null,
   );
 }
 
@@ -73,7 +74,7 @@ function selectControl(options, value, onchange) {
 function segmented(label, options, value, onchange) {
   return h(
     'div',
-    { class: 'field' },
+    { class: label ? 'field' : 'field wide' },
     label ? h('span', { class: 'field-label' }, label) : null,
     h(
       'div',
@@ -179,7 +180,12 @@ function slider(label, { min, max, step = 1, value, format, oninput, onchange, d
     // Fires once the slider is let go, for updates too costly to run while dragging.
     onchange: onchange ? () => onchange(Number(input.value)) : null,
   });
-  const node = h(edit ? 'div' : 'label', { class: 'field', title }, h('span', { class: 'field-label' }, label, output), input);
+  const node = h(
+    edit ? 'div' : 'label',
+    { class: 'field', title },
+    h('span', { class: 'field-label' }, label),
+    h('span', { class: 'slider-control' }, input, h('span', { class: 'slider-output' }, output)),
+  );
   node.set = (next, text) => {
     if (document.activeElement !== input) input.value = next;
     if (edit) {
@@ -191,21 +197,36 @@ function slider(label, { min, max, step = 1, value, format, oninput, onchange, d
   return node;
 }
 
-/** A number box that commits on Enter, blur or the spin buttons, and can be refreshed while not being edited. */
-function numberBox(label, { value, step = 1, min, max, digits = 1, onchange }) {
+/**
+ * A number box that commits on Enter, blur or the spin buttons, and can be
+ * refreshed while not being edited. A unit at the end of the label ("X mm")
+ * goes inside the box; a single axis letter is coloured like the axes.
+ */
+function numberBox(label, { value, step = 1, min, max, digits = 1, onchange, title }) {
   const round = (number) => String(Number(number.toFixed(digits)));
+  const match = /^(.*?)\s*(mm|°|px|%)$/.exec(label);
+  const name = match ? match[1] : label;
+  const unit = match ? match[2] : '';
   const input = h('input', {
     type: 'number',
     step,
     min,
     max,
     value: round(value),
+    'aria-label': label,
     onchange: (event) => {
       const next = Number(event.target.value);
       if (event.target.value !== '' && Number.isFinite(next)) onchange(next);
     },
   });
-  const node = h('label', { class: 'field compact' }, h('span', { class: 'field-label' }, label), input);
+  const axis = ['X', 'Y', 'Z'].includes(name) ? ` axis-${name.toLowerCase()}` : '';
+  const node = h(
+    'label',
+    { class: 'number-box', title: title || label },
+    name ? h('span', { class: `number-name${axis}` }, name) : null,
+    input,
+    unit ? h('span', { class: 'number-unit' }, unit) : null,
+  );
   node.set = (next) => {
     if (document.activeElement !== input) input.value = round(next);
   };
@@ -217,7 +238,23 @@ function textField(label, value, oninput) {
 }
 
 function deleteButton(label, run) {
-  return h('button', { class: 'danger', onclick: run }, label);
+  return h('button', { class: 'danger', onclick: run }, icon('trash', 15), label);
+}
+
+/** A short message in a tinted box, with an optional button. `tone` is 'info' or 'warning'. */
+function notice(text, action, tone = 'info') {
+  return h(
+    'div',
+    { class: `notice ${tone}` },
+    tone === 'warning' ? icon('alert', 15) : null,
+    h('span', null, text),
+    action ? h('button', { class: 'small', onclick: action.run }, action.icon ? icon(action.icon, 14) : null, action.label) : null,
+  );
+}
+
+/** A small caption above a row of boxes that belong together. */
+function caption(text) {
+  return h('div', { class: 'caption' }, text);
 }
 
 function formatDuration(seconds) {
@@ -235,10 +272,11 @@ function geometryPanel({ actions }) {
   if (state.parts.length === 0) {
     return {
       title: 'Geometry',
+      icon: 'file',
       editable: false,
       body: [
         h('p', { class: 'hint' }, 'Drop a STEP file anywhere on the window, or open one here.'),
-        h('button', { class: 'primary', onclick: actions.openFile }, 'Open STEP file …'),
+        h('button', { class: 'primary', onclick: actions.openFile }, icon('folder', 15), 'Open STEP file …'),
       ],
     };
   }
@@ -247,60 +285,51 @@ function geometryPanel({ actions }) {
   const hidden = state.parts.filter((part) => !part.mesh.visible).length;
   const moved = new Set([...state.partOffsets.keys(), ...state.partRotations.keys()]).size;
   return {
-    title: 'Geometry',
+    title: state.fileName,
+    icon: 'file',
     body: [
-      h('div', { class: 'file-name' }, state.fileName),
       h(
         'p',
         { class: 'hint' },
         `${plural(state.parts.length, 'part', 'parts')} · ${plural(triangles, 'triangle', 'triangles')}` +
           (hidden > 0 ? ` · ${hidden} hidden` : ''),
       ),
-      hidden > 0 ? h('button', { onclick: actions.showAllParts }, 'Show all parts') : null,
-      h('button', { onclick: actions.openFile }, 'Open another STEP file …'),
-      group('coordinates', 'Coordinate system', [
-        field(
-          'Up axis',
-          selectControl(Object.entries(UP_AXES), state.upAxis, (value) => {
-            state.upAxis = value;
-            emit('geometry');
-          }),
-        ),
-        h(
-          'p',
-          { class: 'hint' },
-          'Which CAD axis points up in the scene. The floor, the turntable and the lighting follow it.',
-        ),
-        toggle('Show axes', actions.axesVisible(), actions.toggleAxes, 'X red, Y green, Z blue, from the CAD origin (A)'),
-        moved > 0
-          ? [
-              h('p', { class: 'hint' }, `${plural(moved, 'part', 'parts')} moved or turned from the CAD position.`),
-              h(
-                'button',
-                {
-                  onclick: () => {
-                    state.partOffsets.clear();
-                    state.partRotations.clear();
-                    emit('geometry');
-                  },
-                },
-                'Put all parts back',
-              ),
-            ]
-          : null,
-      ]),
+      field(
+        'Up axis',
+        selectControl(Object.entries(UP_AXES), state.upAxis, (value) => {
+          state.upAxis = value;
+          emit('geometry');
+        }),
+      ),
+      h('p', { class: 'hint' }, 'Which CAD axis points up in the scene. The floor, the turntable and the lighting follow it.'),
+      toggle('Show axes', actions.axesVisible(), actions.toggleAxes, 'X red, Y green, Z blue, from the CAD origin (A)'),
+      moved > 0
+        ? notice(`${plural(moved, 'part', 'parts')} moved or turned from the CAD position.`, {
+            label: 'Put all back',
+            icon: 'undo',
+            run: () => {
+              state.partOffsets.clear();
+              state.partRotations.clear();
+              emit('geometry');
+            },
+          })
+        : null,
+    ],
+    footer: [
+      h('button', { onclick: actions.openFile }, icon('folder', 15), 'Open another file …'),
+      hidden > 0 ? h('button', { onclick: actions.showAllParts }, icon('eye', 15), 'Show all') : null,
     ],
   };
 }
 
-function partsPanel({ actions }) {
-  const hidden = state.parts.filter((part) => !part.mesh.visible).length;
+/** Exploded view: how far apart the parts move, in which direction and from where. */
+function explodePanel() {
   return {
-    title: 'Parts',
-    editable: false,
+    title: 'Exploded view',
+    icon: 'explode',
     body: [
-      h('p', { class: 'hint' }, 'Click a part in the viewport or in the tree to open it.'),
-      hidden > 0 ? h('button', { onclick: actions.showAllParts }, `Show all parts (${hidden} hidden)`) : null,
+      h('p', { class: 'hint' }, 'Pulls the parts of an assembly apart to show how it is built. Render jobs keep their own setting.'),
+      explodeControls(false),
     ],
   };
 }
@@ -362,6 +391,7 @@ function partPanel(part, { actions }) {
 
   return {
     title: part.label,
+    icon: 'part',
     body: [
       toggle('Visible', part.mesh.visible, () => actions.togglePart(part.id)),
       field(
@@ -389,8 +419,9 @@ function partPanel(part, { actions }) {
         h('button', { onclick: actions.showAllParts }, 'Show all'),
       ),
       group('part-position', 'Position and rotation', [
-        h('p', { class: 'hint' }, 'Offset from the CAD position along the CAD axes, and turn about the CAD axes around the part\'s centre.'),
+        caption('Offset from the CAD position'),
         h('div', { class: 'field-grid three' }, positionBoxes),
+        caption('Turn around the part\'s centre'),
         h('div', { class: 'field-grid three' }, rotationBoxes),
         h(
           'div',
@@ -418,6 +449,7 @@ function partPanel(part, { actions }) {
           h(
             'button',
             { onclick: () => actions.resetPartPlacement(part.id), disabled: !placed, title: 'Back to the CAD position' },
+            icon('undo', 15),
             'Reset',
           ),
         ),
@@ -451,7 +483,7 @@ function partPanel(part, { actions }) {
                 onchange: () => emit('explode'),
               }),
               state.explode.amount === 0
-                ? h('p', { class: 'hint' }, 'Set how far the assembly is exploded under Camera or in a render job.')
+                ? h('p', { class: 'hint' }, 'Set how far the assembly is exploded under Geometry › Exploded view, or in a render job.')
                 : null,
             ],
             { open: false },
@@ -468,41 +500,39 @@ function partPanel(part, { actions }) {
 
 // --- Sections -------------------------------------------------------------------
 
-function sectionsPanel({ actions }) {
+/** How the cut faces of all sections look. */
+function capControls() {
   const cap = state.sectionCap;
-  return {
-    title: 'Sections',
-    body: [
-      h('button', { class: 'primary', onclick: actions.addSection }, 'Add section'),
-      field(
-        'Cut faces',
-        selectControl(
-          [
-            ['material', 'Like the part'],
-            ['color', 'Own colour'],
-          ],
-          cap.mode,
-          (value) => {
-            cap.mode = value;
-            emit('sections');
-          },
-        ),
+  return [
+    field(
+      'Colour',
+      selectControl(
+        [
+          ['material', 'Like the part'],
+          ['color', 'Own colour'],
+        ],
+        cap.mode,
+        (value) => {
+          cap.mode = value;
+          emit('sections');
+        },
       ),
-      cap.mode === 'color'
-        ? field(
-            'Colour',
-            h('input', {
-              type: 'color',
-              value: cap.color,
-              oninput: (event) => {
-                cap.color = event.target.value;
-                emit('sections:live');
-              },
-            }),
-          )
-        : null,
-    ],
-  };
+    ),
+    cap.mode === 'color'
+      ? field(
+          'Own colour',
+          h('input', {
+            type: 'color',
+            value: cap.color,
+            oninput: (event) => {
+              cap.color = event.target.value;
+              emit('sections:live');
+            },
+          }),
+        )
+      : null,
+    h('p', { class: 'hint' }, 'Applies to all sections.'),
+  ];
 }
 
 function sectionPanel(section, { viewer, actions }) {
@@ -520,6 +550,7 @@ function sectionPanel(section, { viewer, actions }) {
 
   return {
     title: section.name,
+    icon: 'slice',
     body: [
       textField('Name', section.name, (value) => {
         section.name = value || 'Section';
@@ -527,7 +558,7 @@ function sectionPanel(section, { viewer, actions }) {
       }),
       toggle('Active', section.enabled, set('enabled')),
       field(
-        'Plane at right angles to',
+        'Cuts across',
         selectControl(
           [
             ['0', 'X axis'],
@@ -608,25 +639,15 @@ function sectionPanel(section, { viewer, actions }) {
             ),
           ])
         : null,
-      deleteButton('Delete section', () => {
-        state.sections = state.sections.filter((other) => other !== section);
-        select('sections');
-      }),
+      group('section-caps', 'Cut faces', capControls(), { open: false }),
+    ],
+    footer: [
+      deleteButton('Delete', () => actions.deleteSection(section.id)),
     ],
   };
 }
 
 // --- Materials --------------------------------------------------------------------
-
-function materialsPanel({ actions }) {
-  return {
-    title: 'Materials',
-    body: [
-      h('button', { class: 'primary', onclick: actions.addMaterial }, 'Add material'),
-      h('p', { class: 'hint' }, 'Parts without a material keep their CAD colour.'),
-    ],
-  };
-}
 
 function partList(parts, renderItem, actions) {
   return h(
@@ -642,6 +663,7 @@ function cadMaterialPanel({ actions }) {
   const parts = state.parts.filter((part) => !materialEntryOf(part.id));
   return {
     title: 'CAD colours',
+    icon: 'palette',
     editable: false,
     body: [
       h('p', { class: 'hint' }, 'These parts have no material yet and keep the colour from the CAD file.'),
@@ -719,6 +741,8 @@ function materialPanel(entry, { actions }) {
 
   return {
     title: materialEntryLabel(entry),
+    icon: 'palette',
+    badge: modified ? 'changed' : null,
     body: [
       field(
         'Material',
@@ -770,20 +794,6 @@ function materialPanel(entry, { actions }) {
             ]
           : null,
       ]),
-      h(
-        'button',
-        {
-          disabled: !modified,
-          title: modified ? `Colour and fine tuning as in the library for ${def.label}` : 'Already at the defaults',
-          onclick: () => {
-            entry.colorHex = def.color;
-            entry.tuning = defaultTuning(entry.materialId);
-            emit('materials');
-          },
-        },
-        icon('undo', 15),
-        'Reset to defaults',
-      ),
       group('material-parts', `Assigned parts (${entry.partIds.size})`, [
         h('p', { class: 'hint' }, 'Click parts in the viewport to add or remove them.'),
         selectionBox(
@@ -826,17 +836,30 @@ function materialPanel(entry, { actions }) {
           { open: false },
         ),
       ]),
-      deleteButton('Delete material', () => {
-        removeMaterial(entry.id);
-        select('materials');
-      }),
+    ],
+    footer: [
+      h(
+        'button',
+        {
+          disabled: !modified,
+          title: modified ? `Colour and fine tuning as in the library for ${def.label}` : 'Already at the defaults',
+          onclick: () => {
+            entry.colorHex = def.color;
+            entry.tuning = defaultTuning(entry.materialId);
+            emit('materials');
+          },
+        },
+        icon('undo', 15),
+        'Reset to defaults',
+      ),
+      deleteButton('Delete', () => actions.deleteMaterial(entry.id)),
     ],
   };
 }
 
 // --- Scene ------------------------------------------------------------------------
 
-function scenePanel({ actions }) {
+function scenePanel(which, { actions }) {
   const { scene } = state;
   const environment = scene.background === 'environment';
   const set = (key, live = false) => (value) => {
@@ -848,14 +871,55 @@ function scenePanel({ actions }) {
   const custom = scene.background.startsWith('#');
   const colorKind = custom ? 'custom' : scene.background;
 
+  if (which === 'floor') {
+    return {
+      title: 'Floor',
+      icon: 'floor',
+      body: environment
+        ? [
+            h('p', { class: 'hint' }, 'With a scene as background, the scene brings its own ground.'),
+            h('button', { onclick: () => set('background')('light') }, 'Use a colour background'),
+          ]
+        : [
+            field('Shape', selectControl(Object.entries(FLOORS), scene.floor, set('floor'))),
+            scene.floor === 'cove' ? colorField('Cove colour', 'coveColor') : null,
+            scene.floor === 'shadow' ? h('p', { class: 'hint' }, 'The floor blends into the background and only shows shadows and reflections.') : null,
+            scene.floor !== 'none'
+              ? group('scene-reflection', 'Reflections', [
+                  slider('Reflection', {
+                    min: 0,
+                    max: 100,
+                    value: Math.round(scene.reflection * 100),
+                    format: (value) => (value === 0 ? 'off' : percent(value)),
+                    title: 'How strongly the floor mirrors the model and the light. On a dark background a dark lighting preset fits',
+                    oninput: (value) => set('reflection', true)(value / 100),
+                    onchange: () => emit('scene'),
+                  }),
+                  scene.reflection > 0
+                    ? slider('Blur', {
+                        min: 0,
+                        max: 100,
+                        value: Math.round(scene.reflectionBlur * 100),
+                        format: (value) => (value === 0 ? 'sharp' : percent(value)),
+                        title: 'Sharp like a mirror, or soft like a glossy surface',
+                        oninput: (value) => set('reflectionBlur', true)(value / 100),
+                      })
+                    : null,
+                ])
+              : null,
+          ],
+    };
+  }
+
   return {
-    title: 'Scene',
+    title: 'Background',
+    icon: 'background',
     body: [
       segmented(
-        'Background',
+        null,
         [
-          ['color', 'Colour'],
-          ['environment', 'Scene'],
+          ['color', 'Colour', 'palette'],
+          ['environment', 'Scene', 'scene'],
         ],
         environment ? 'environment' : 'color',
         (value) => set('background')(value === 'environment' ? 'environment' : 'light'),
@@ -869,7 +933,7 @@ function scenePanel({ actions }) {
                 ? `The HDRI "${state.lighting.hdriName}" shows behind the model and brings its own ground.`
                 : 'The lighting studio shows behind the model. For a photo background, load an HDRI file.',
             ),
-            h('button', { onclick: actions.loadHdri }, state.lighting.presetId === 'custom' ? 'Other HDRI file …' : 'Load HDRI file …'),
+            h('button', { onclick: actions.loadHdri }, icon('upload', 15), state.lighting.presetId === 'custom' ? 'Other HDRI file …' : 'Load HDRI file …'),
           ]
         : [
             field(
@@ -899,45 +963,11 @@ function scenePanel({ actions }) {
                       set('gradientType'),
                     ),
                   ),
-                  h(
-                    'div',
-                    { class: 'field-grid two' },
-                    colorField(scene.gradientType === 'radial' ? 'Centre' : 'Top', 'gradientFrom'),
-                    colorField(scene.gradientType === 'radial' ? 'Edge' : 'Bottom', 'gradientTo'),
-                  ),
+                  colorField(scene.gradientType === 'radial' ? 'Centre' : 'Top', 'gradientFrom'),
+                  colorField(scene.gradientType === 'radial' ? 'Edge' : 'Bottom', 'gradientTo'),
                 ]
               : null,
           ],
-      environment
-        ? null
-        : group('scene-floor', 'Floor', [
-            field('Shape', selectControl(Object.entries(FLOORS), scene.floor, set('floor'))),
-            scene.floor === 'cove' ? colorField('Colour of the cove', 'coveColor') : null,
-            scene.floor === 'shadow' ? h('p', { class: 'hint' }, 'The floor blends into the background and only shows shadows and reflections.') : null,
-          ]),
-      !environment && scene.floor !== 'none'
-        ? group('scene-reflection', 'Reflections', [
-            slider('Reflection', {
-              min: 0,
-              max: 100,
-              value: Math.round(scene.reflection * 100),
-              format: (value) => (value === 0 ? 'off' : percent(value)),
-              title: 'How strongly the floor mirrors the model and the light. On a dark background a dark lighting preset fits',
-              oninput: (value) => set('reflection', true)(value / 100),
-              onchange: () => emit('scene'),
-            }),
-            scene.reflection > 0
-              ? slider('Blur', {
-                  min: 0,
-                  max: 100,
-                  value: Math.round(scene.reflectionBlur * 100),
-                  format: (value) => (value === 0 ? 'sharp mirror' : percent(value)),
-                  title: 'Sharp like a mirror, or soft like a glossy surface',
-                  oninput: (value) => set('reflectionBlur', true)(value / 100),
-                })
-              : null,
-          ])
-        : null,
     ],
   };
 }
@@ -949,7 +979,8 @@ const evFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1, sign
 function lightingPanel({ actions }) {
   const { lighting } = state;
   return {
-    title: 'Lighting',
+    title: 'Light setup',
+    icon: 'sliders',
     body: [
       field(
         'Preset',
@@ -973,8 +1004,8 @@ function lightingPanel({ actions }) {
       ),
       lighting.presetId === 'custom'
         ? [
-            h('div', { class: 'file-name' }, lighting.hdriName),
-            h('button', { onclick: actions.loadHdri }, 'Other HDRI file …'),
+            field('HDRI', h('div', { class: 'file-name' }, lighting.hdriName)),
+            h('button', { onclick: actions.loadHdri }, icon('upload', 15), 'Other HDRI file …'),
           ]
         : null,
       slider('Rotation', {
@@ -1000,7 +1031,6 @@ function lightingPanel({ actions }) {
           emit('lighting:live');
         },
       }),
-      h('button', { class: 'primary', onclick: actions.addLight }, 'Add softbox'),
     ],
   };
 }
@@ -1021,6 +1051,7 @@ function lightPanel(light, { actions }) {
 
   return {
     title: light.name,
+    icon: 'softbox',
     body: [
       textField('Name', light.name, (value) => {
         light.name = value || 'Softbox';
@@ -1035,6 +1066,7 @@ function lightPanel(light, { actions }) {
             onclick: () => actions.pickHighlight(light),
             title: 'Places the softbox so that its highlight lands on the clicked point',
           },
+          icon('target', 15),
           picking ? 'Click a point on the model …' : 'Place highlight',
         ),
         angle('Direction', 'az', -180, 180, '0° is the front, 90° the right'),
@@ -1087,11 +1119,8 @@ function lightPanel(light, { actions }) {
           }),
         ),
       ]),
-      deleteButton('Delete softbox', () => {
-        state.lighting.lights = state.lighting.lights.filter((other) => other !== light);
-        select('lighting');
-      }),
     ],
+    footer: [deleteButton('Delete', () => actions.deleteLight(light.id))],
   };
 }
 
@@ -1158,6 +1187,7 @@ function viewsPanel({ viewer, actions }) {
 
   return {
     title: 'Camera',
+    icon: 'lens',
     body: [
       focal,
       toggle('Parallel projection', parallel, (checked) => {
@@ -1214,6 +1244,7 @@ function viewsPanel({ viewer, actions }) {
                   h(
                     'button',
                     { class: picking ? 'active' : '', onclick: actions.pickFocus },
+                    icon('target', 15),
                     picking ? 'Click a point …' : 'Pick focus',
                   ),
                   camera.focusPoint
@@ -1234,9 +1265,8 @@ function viewsPanel({ viewer, actions }) {
         ],
         { open: camera.dof },
       ),
-      explodeControls(),
-      h('button', { class: 'primary', onclick: actions.addView }, 'Save view'),
     ],
+    footer: [h('button', { onclick: actions.addView }, icon('bookmark', 15), 'Save view')],
     live: () => {
       const current = viewer.getPose();
       for (const key of Object.keys(boxes)) boxes[key].set(current[key]);
@@ -1249,14 +1279,15 @@ function viewsPanel({ viewer, actions }) {
 }
 
 /** Exploded view: how far apart the parts move, in which direction and from where. */
-function explodeControls() {
+/**
+ * Exploded view: how far apart the parts move, in which direction and from
+ * where. As a foldable group inside a render job, or as a panel's body.
+ */
+function explodeControls(asGroup = true) {
   if (state.parts.length < 2) return null;
   const { explode } = state;
   const own = Object.keys(explode.parts || {}).length;
-  return group(
-    'explode',
-    'Exploded view',
-    [
+  const controls = [
       slider('Distance', {
         min: 0,
         max: 150,
@@ -1307,35 +1338,38 @@ function explodeControls() {
             'Reset part settings',
           )
         : null,
-    ],
-    { open: explode.amount > 0, title: 'Pulls the parts of an assembly apart to show how it is built' },
-  );
+  ];
+  return asGroup ? group('explode', 'Exploded view', controls, { open: explode.amount > 0, title: 'Pulls the parts of an assembly apart to show how it is built' }) : controls;
 }
 
 function viewPanel(view, { viewer, actions }) {
   return {
     title: view.name,
+    icon: 'bookmark',
     body: [
       textField('Name', view.name, (value) => {
         view.name = value || 'View';
         emit('views:live');
       }),
-      h('button', { onclick: () => actions.showView(view) }, 'Show'),
       h(
-        'button',
-        {
-          onclick: () => {
-            Object.assign(view, viewer.getViewState(), { explode: structuredClone(state.explode) });
-            emit('views');
+        'div',
+        { class: 'button-row' },
+        h('button', { onclick: () => actions.showView(view) }, icon('eye', 15), 'Show'),
+        h(
+          'button',
+          {
+            title: 'Overwrite with the current view',
+            onclick: () => {
+              Object.assign(view, viewer.getViewState(), { explode: structuredClone(state.explode) });
+              emit('views');
+            },
           },
-        },
-        'Overwrite with the current view',
+          icon('bookmark', 15),
+          'Update',
+        ),
       ),
-      deleteButton('Delete view', () => {
-        state.views = state.views.filter((other) => other !== view);
-        select('views');
-      }),
     ],
+    footer: [deleteButton('Delete', () => actions.deleteView(view.id))],
   };
 }
 
@@ -1407,86 +1441,26 @@ function imageSettings(settings, { actions, onchange }) {
   ];
 }
 
-function deviceGroup() {
+/** Where renderings run: graphics card or processor, and the gentle mode. Shown in the app settings. */
+export function deviceControls() {
   const { output } = state;
   const set = (key) => (value) => {
     output[key] = value;
     emit('output');
   };
-  return group(
-    'output-device',
-    'Rendering device',
-    [
-      field(
-        'Render on',
-        selectControl(
-          Object.entries(RENDER_DEVICES).map(([key, value]) => [key, value.label]),
-          output.device,
-          set('device'),
-        ),
+  return [
+    field(
+      'Render on',
+      selectControl(
+        Object.entries(RENDER_DEVICES).map(([key, value]) => [key, value.label]),
+        output.device,
+        set('device'),
       ),
-      output.device === 'gpu'
-        ? toggle('Gentle mode', output.gentle, set('gentle'), 'For laptops and weaker graphics cards: smaller portions, but slower')
-        : h('p', { class: 'hint' }, 'Without a graphics card an image takes many times as long. Meant as a fallback.'),
-    ],
-    { open: false },
-  );
-}
-
-function jobSummary(job, actions) {
-  const { width, height } = actions.resolveOutputSize(job);
-  return job.type === 'animation' ? `${job.turntableFrames} images · ${width} × ${height}` : `${width} × ${height}`;
-}
-
-function outputPanel({ actions }) {
-  const jobs = state.jobs;
-  const views = state.views.length;
-  return {
-    title: 'Output',
-    body: [
-      h(
-        'p',
-        { class: 'hint' },
-        'A render job keeps its camera, explosion and image settings. Set up as many as you like, then render them all.',
-      ),
-      h(
-        'div',
-        { class: 'button-row' },
-        h('button', { onclick: () => actions.addJob('image') }, icon('image', 15), 'Image'),
-        h('button', { onclick: actions.addAnimationJob }, icon('film', 15), 'Animation'),
-      ),
-      views > 0
-        ? h(
-            'button',
-            { onclick: actions.jobsFromViews, title: 'One image job for each saved view that has none yet' },
-            `Jobs from saved views (${views})`,
-          )
-        : null,
-      jobs.length > 0
-        ? h(
-            'ul',
-            { class: 'item-list' },
-            jobs.map((job) =>
-              h(
-                'li',
-                { tabIndex: 0, onclick: () => select(`job:${job.id}`), onkeydown: (event) => event.key === 'Enter' && select(`job:${job.id}`) },
-                icon(job.type === 'animation' ? 'film' : 'image', 15),
-                h('span', { class: 'item-name' }, job.name),
-                h('span', { class: 'item-detail' }, jobSummary(job, actions)),
-              ),
-            ),
-          )
-        : null,
-      actions.renderSupported
-        ? h(
-            'button',
-            { class: 'primary', onclick: actions.renderAllJobs, disabled: jobs.length === 0 },
-            jobs.length > 1 ? `Render all ${jobs.length} jobs` : 'Render job',
-          )
-        : h('p', { class: 'hint error' }, NO_WEBGPU),
-      deviceGroup(),
-    ],
-  };
+    ),
+    output.device === 'gpu'
+      ? toggle('Gentle mode', output.gentle, set('gentle'), 'For laptops and weaker graphics cards: smaller portions, but slower')
+      : h('p', { class: 'hint' }, 'Without a graphics card an image takes many times as long. Meant as a fallback.'),
+  ];
 }
 
 /** Guide lines over the image area, for lining up the model. */
@@ -1508,6 +1482,7 @@ function jobPanel(job, { actions }) {
   };
   return {
     title: job.name,
+    icon: job.type === 'animation' ? 'film' : 'image',
     body: [
       textField('Name', job.name, (value) => {
         job.name = value || 'Render job';
@@ -1530,6 +1505,7 @@ function jobPanel(job, { actions }) {
       h(
         'button',
         { onclick: () => actions.fit(), title: 'The dashed frame in the viewport shows the image' },
+        icon('fit', 15),
         'Fit the model into the frame',
       ),
       guidesControls(actions),
@@ -1561,62 +1537,19 @@ function jobPanel(job, { actions }) {
         : null,
       imageSettings(job, { actions, onchange: changed }),
       explodeControls(),
+      actions.renderSupported ? null : notice(NO_WEBGPU, null, 'warning'),
+    ],
+    footer: [
       actions.renderSupported
-        ? h('button', { class: 'primary', onclick: () => actions.renderJob(job) }, job.type === 'animation' ? 'Render this turntable' : 'Render this image')
-        : h('p', { class: 'hint error' }, NO_WEBGPU),
-      h(
-        'div',
-        { class: 'button-row' },
-        h('button', { onclick: () => actions.duplicateJob(job) }, icon('copy', 15), 'Duplicate'),
-        h('button', { class: 'danger', onclick: () => actions.deleteJob(job) }, icon('trash', 15), 'Delete'),
-      ),
+        ? h('button', { class: 'primary', onclick: () => actions.renderJob(job) }, icon('play', 15), 'Render')
+        : null,
+      h('button', { class: 'icon-only', title: 'Duplicate', 'aria-label': 'Duplicate', onclick: () => actions.duplicateJob(job) }, icon('copy', 15)),
+      deleteButton('Delete', () => actions.deleteJob(job)),
     ],
   };
 }
 
 // --- Renders --------------------------------------------------------------------
-
-function rendersPanel({ actions }) {
-  if (!actions.renderSupported) {
-    return { title: 'Renders', editable: false, body: [h('p', { class: 'hint error' }, NO_WEBGPU)] };
-  }
-  const done = state.renders.filter((render) => render.status === 'done').length;
-  const queued = state.renders.filter((render) => render.status === 'queued').length;
-  const running = state.renders.some((render) => render.status === 'running');
-  return {
-    title: 'Renders',
-    editable: false,
-    body: [
-      state.renders.length === 0
-        ? h('p', { class: 'hint' }, 'Set up render jobs under Output and render them. Finished images stay with the project.')
-        : h(
-            'p',
-            { class: 'hint' },
-            [
-              running ? 'One rendering is running' : null,
-              queued > 0 ? `${queued} waiting` : null,
-              done > 0 ? `${done} done` : null,
-            ]
-              .filter(Boolean)
-              .join(' · '),
-          ),
-      h('button', { onclick: () => select('output') }, 'Go to the render jobs'),
-      queued > 0 ? h('button', { class: 'danger', onclick: actions.cancelQueue }, `Clear the queue (${queued})`) : null,
-      done > 0
-        ? group('renders-save', 'Save all', [
-            h(
-              'div',
-              { class: 'button-row' },
-              Object.entries(FILE_FORMATS).map(([key, value]) =>
-                h('button', { onclick: () => actions.saveAllRenders(key) }, `${value.extension.toUpperCase()} (ZIP)`),
-              ),
-            ),
-            h('p', { class: 'hint' }, 'All finished renderings with their adjustments, turntables in folders of their own.'),
-          ])
-        : null,
-    ],
-  };
-}
 
 /** Sliders for the image adjustments of a finished rendering. */
 function adjustControls(render) {
@@ -1656,7 +1589,7 @@ function renderPanelFor(render, { actions }) {
   const bar = h('div', { class: 'progress-bar' }, h('div', { class: 'progress-fill' }));
   const text = h('p', { class: 'hint' });
   const device = h('p', { class: 'hint' });
-  const buttons = h('div', { class: 'button-column' });
+  const buttons = h('div', { class: 'footer-buttons' });
   const count = render.turntable;
 
   // Time left in a turntable series, from the images finished so far.
@@ -1736,7 +1669,7 @@ function renderPanelFor(render, { actions }) {
       ),
     );
   } else if (render.status === 'queued') {
-    buttons.append(h('button', { class: 'danger', onclick: () => actions.deleteRender(render) }, 'Take out of the queue'));
+    buttons.append(deleteButton('Take out of the queue', () => actions.deleteRender(render)));
   } else {
     if (render.status === 'done') {
       const chosen = render.format || 'png';
@@ -1746,15 +1679,17 @@ function renderPanelFor(render, { actions }) {
             h(
               'button',
               { class: 'primary', onclick: () => actions.saveVideo(render), title: 'Recorded in real time; keep this tab in front' },
-              'Save video',
+              icon('download', 15),
+              'Video',
             ),
           );
         }
         buttons.append(
           h(
             'button',
-            { onclick: () => actions.saveRender(render, chosen) },
-            `Save images (${FILE_FORMATS[chosen].extension.toUpperCase()}, ZIP)`,
+            { onclick: () => actions.saveRender(render, chosen), title: 'All images in a ZIP file' },
+            icon('download', 15),
+            `${FILE_FORMATS[chosen].extension.toUpperCase()} images`,
           ),
         );
       } else {
@@ -1763,19 +1698,21 @@ function renderPanelFor(render, { actions }) {
           buttons.append(
             h(
               'button',
-              { class: format === chosen ? 'primary' : null, onclick: () => actions.saveRender(render, format) },
-              `Save ${FILE_FORMATS[format].extension.toUpperCase()}`,
+              { class: format === chosen ? 'primary' : null, onclick: () => actions.saveRender(render, format), title: `Save as ${FILE_FORMATS[format].label}` },
+              icon('download', 15),
+              FILE_FORMATS[format].extension.toUpperCase(),
             ),
           );
         }
       }
     }
-    buttons.append(h('button', { class: 'danger', onclick: () => actions.deleteRender(render) }, 'Delete rendering'));
+    buttons.append(deleteButton('Delete', () => actions.deleteRender(render)));
   }
   update();
 
   return {
     title: render.name,
+    icon: count ? 'film' : 'image',
     editable: false,
     body: [
       h(
@@ -1789,8 +1726,8 @@ function renderPanelFor(render, { actions }) {
       device,
       player,
       render.status === 'done' ? adjustControls(render) : null,
-      buttons,
     ],
+    footer: [buttons],
     live: () => {
       update();
       player?.update();
@@ -1812,18 +1749,17 @@ export function renderPanel(container, context) {
 
   if (key === 'geometry') panel = geometryPanel(context);
   else if (state.parts.length === 0) panel = null;
-  else if (key === 'parts') panel = partsPanel(context);
   else if (kind === 'part') panel = state.parts[id] ? partPanel(state.parts[id], context) : null;
-  else if (key === 'sections') panel = sectionsPanel(context);
+  else if (key === 'explode') panel = state.parts.length > 1 ? explodePanel(context) : null;
   else if (kind === 'section') {
     const section = state.sections.find((item) => item.id === id);
     panel = section ? sectionPanel(section, context) : null;
-  } else if (key === 'materials') panel = materialsPanel(context);
-  else if (key === 'material:cad') panel = cadMaterialPanel(context);
+  } else if (key === 'material:cad') panel = cadMaterialPanel(context);
   else if (kind === 'material') {
     const entry = state.materials.find((item) => item.id === id);
     panel = entry ? materialPanel(entry, context) : null;
-  } else if (key === 'scene') panel = scenePanel(context);
+  } else if (key === 'scene:background') panel = scenePanel('background', context);
+  else if (key === 'scene:floor') panel = scenePanel('floor', context);
   else if (key === 'lighting') panel = lightingPanel(context);
   else if (kind === 'light') {
     const light = state.lighting.lights.find((item) => item.id === id);
@@ -1832,12 +1768,10 @@ export function renderPanel(container, context) {
   else if (kind === 'view') {
     const view = state.views.find((item) => item.id === id);
     panel = view ? viewPanel(view, context) : null;
-  } else if (key === 'output') panel = outputPanel(context);
-  else if (kind === 'job') {
+  } else if (kind === 'job') {
     const job = state.jobs.find((item) => item.id === id);
     panel = job ? jobPanel(job, context) : null;
-  } else if (key === 'renders') panel = rendersPanel(context);
-  else if (kind === 'render') {
+  } else if (kind === 'render') {
     const render = state.renders.find((item) => item.id === id);
     panel = render ? renderPanelFor(render, context) : null;
   }
@@ -1845,6 +1779,7 @@ export function renderPanel(container, context) {
   container.hidden = !panel;
   if (!panel) {
     container.replaceChildren();
+    delete container.dataset.key;
     return null;
   }
 
@@ -1854,20 +1789,22 @@ export function renderPanel(container, context) {
     h('button', { class: className, title, 'aria-label': title, onclick: run }, icon(name, 16));
   const scroll = container.querySelector('.panel-body')?.scrollTop ?? 0;
   const body = h('div', { class: 'panel-body' }, panel.body);
-  container.replaceChildren(
-    h(
-      'header',
-      { class: 'panel-header' },
-      h('h2', { title: panel.title }, panel.title),
-      editable
-        ? [
-            headerButton('check', 'Keep changes and close', actions.applyPanel, 'icon-button apply'),
-            headerButton('close', 'Discard changes made in this panel', actions.discardPanel, 'icon-button discard'),
-          ]
-        : headerButton('close', 'Close', actions.closePanel),
-    ),
-    body,
+  const footer = (panel.footer || []).flat(Infinity).filter(Boolean);
+  const header = h(
+    'header',
+    { class: 'panel-header' },
+    panel.icon ? h('span', { class: 'panel-icon' }, icon(panel.icon, 18)) : null,
+    h('h2', { title: panel.title }, panel.title),
+    panel.badge ? h('span', { class: 'panel-badge' }, panel.badge) : null,
+    editable
+      ? [
+          headerButton('check', 'Keep changes and close', actions.applyPanel, 'icon-button apply'),
+          headerButton('close', 'Discard changes made in this panel', actions.discardPanel, 'icon-button discard'),
+        ]
+      : headerButton('close', 'Close', actions.closePanel),
   );
+  container.replaceChildren(header, body);
+  if (footer.length > 0) container.append(h('footer', { class: 'panel-footer' }, footer));
   body.scrollTop = container.dataset.key === key ? scroll : 0;
   container.dataset.key = key;
   return panel.live || null;

@@ -7,13 +7,16 @@
   --muted: #6b7280;
   --accent: #2563eb;
   --accent-soft: #e9f0fe;
+  --warning: #c2410c;
+  --warning-soft: #fff4ea;
+  --faint: #9aa1ab;
   --ok: #17a34a;
   --danger: #c0392b;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 6px 20px rgba(16, 24, 40, 0.08);
   --radius: 8px;
   --gap: 10px;
   --sidebar-width: 280px;
-  --panel-width: 300px;
+  --panel-width: 330px;
   --inset: 300px;
   color-scheme: light;
 }
@@ -51,7 +54,7 @@ body {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 0 14px;
+  padding: 0 10px 0 14px;
   background: var(--card);
   border-bottom: 1px solid var(--border);
 }
@@ -78,6 +81,16 @@ body {
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+#settings-btn {
+  margin-left: auto;
+  width: 34px;
+  height: 34px;
+}
+
+#settings-btn:hover {
+  background: var(--page);
 }
 
 #projects-btn {
@@ -456,8 +469,13 @@ select {
 }
 
 button {
-  height: 32px;
-  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  white-space: nowrap;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   background: var(--card);
@@ -484,23 +502,31 @@ button:disabled {
 }
 
 button.primary {
-  background: #1f2328;
-  border-color: #1f2328;
+  background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
   font-weight: 500;
 }
 
 button.primary:hover {
-  background: #383e46;
+  background: #1d4ed8;
+  border-color: #1d4ed8;
 }
 
 button.danger {
+  border-color: transparent;
+  background: none;
   color: var(--danger);
 }
 
 button.danger:hover {
   background: #fdf0ee;
-  border-color: #e9b9b3;
+}
+
+button.icon-only {
+  width: 30px;
+  padding: 0;
+  color: var(--muted);
 }
 
 button.active {
@@ -548,7 +574,8 @@ input[type='text'],
 input[type='number'],
 select {
   width: 100%;
-  height: 32px;
+  min-width: 0;
+  height: 30px;
   padding: 0 9px;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
@@ -557,7 +584,7 @@ select {
 
 input[type='color'] {
   width: 100%;
-  height: 32px;
+  height: 30px;
   padding: 2px;
   border: 1px solid var(--border-strong);
   border-radius: 6px;
@@ -618,52 +645,88 @@ input[role='switch']:checked::before {
 .node {
   display: flex;
   align-items: center;
-  gap: 7px;
-  height: 32px;
-  padding: 0 6px 0 4px;
+  gap: 8px;
+  height: 28px;
+  padding: 0 4px 0 30px;
   border-radius: 6px;
+  font-size: 13px;
   cursor: pointer;
   user-select: none;
+  position: relative;
 }
 
-.node.depth-0 {
-  font-weight: 500;
+.node.category {
+  height: 32px;
+  margin-top: 4px;
+  padding-left: 4px;
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.node.category:first-child {
+  margin-top: 0;
+}
+
+/* A group inside a category (Parts) folds as well; its arrow sits left of the icons. */
+.node.depth-0:has(> .node-toggle) {
+  padding-left: 8px;
 }
 
 .node.depth-1 {
-  height: 28px;
-  padding-left: 49px;
-  font-size: 13px;
+  padding-left: 54px;
 }
 
-/* A sub-group with its own fold button sits a little further left, so its label lines up. */
-.node.depth-1:has(> .node-toggle) {
-  padding-left: 27px;
-}
-
-.node.depth-2 {
-  height: 28px;
-  padding-left: 71px;
-  font-size: 13px;
+.node.empty {
+  color: var(--faint);
+  font-size: 12.5px;
+  cursor: default;
 }
 
 .node-icon {
   display: inline-flex;
+  flex: none;
   color: var(--muted);
+}
+
+.node.category .node-icon {
+  color: var(--text);
 }
 
 .node:hover {
   background: var(--page);
 }
 
+.node.empty:hover {
+  background: none;
+}
+
 .node.selected {
   background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
+  color: #1d4ed8;
+}
+
+.node.selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 2.5px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.node.selected .node-icon {
+  color: var(--accent);
 }
 
 .node.disabled {
   color: #a3a9b3;
   cursor: default;
+}
+
+.node.disabled .node-icon {
+  color: #b7bcc4;
 }
 
 .node.disabled:hover {
@@ -675,8 +738,9 @@ input[role='switch']:checked::before {
   color: var(--muted);
 }
 
-.node.dimmed .swatch {
-  opacity: 0.35;
+.node.dimmed .swatch,
+.node.dimmed .node-icon {
+  opacity: 0.45;
 }
 
 .node-toggle {
@@ -684,53 +748,8 @@ input[role='switch']:checked::before {
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: var(--muted);
-}
-
-button.node-toggle:hover {
-  background: rgba(15, 23, 42, 0.08);
-  color: var(--text);
-}
-
-.node-status {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
   width: 16px;
-  height: 16px;
-  border-radius: 50%;
-}
-
-.node-status.ok {
-  background: var(--ok);
-  color: #fff;
-}
-
-.node-status.todo {
-  border: 2px solid var(--accent);
-}
-
-.node-status.none {
-  border: 1.5px solid var(--border-strong);
-}
-
-.node-status.running {
-  border: 2px solid var(--accent-soft);
-  border-top-color: var(--accent);
-  animation: spin 0.9s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  color: var(--faint);
 }
 
 .node-label {
@@ -741,70 +760,143 @@ button.node-toggle:hover {
   white-space: nowrap;
 }
 
-.node-count {
-  color: var(--muted);
-  font-weight: 400;
+.node-detail,
+.node-fill {
+  flex: 1 1 0;
+  min-width: 0;
 }
 
 .node-detail {
-  flex: 1 1 0;
-  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-  color: var(--muted);
+  color: var(--faint);
   font-size: 12px;
   font-weight: 400;
 }
 
-.node-detail.warn {
-  color: #b45309;
+.node-warning {
+  display: inline-flex;
+  flex: none;
+  color: var(--warning);
 }
 
-.node-plus,
+.progress-ring {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0 3px;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) var(--p), #d9e2f5 0);
+  -webkit-mask: radial-gradient(circle, transparent 4.3px, #000 4.8px);
+  mask: radial-gradient(circle, transparent 4.3px, #000 4.8px);
+}
+
 .node-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: none;
   flex: none;
   width: 22px;
   height: 22px;
-  margin-left: auto;
   padding: 0;
-  border-radius: 50%;
+  border: 0;
+  border-radius: 5px;
+  background: none;
   color: var(--muted);
 }
 
-.node-detail + .node-plus,
-.node-detail + .node-action {
-  margin-left: 0;
-}
-
-.node-plus:hover {
-  border-color: var(--accent);
-  background: var(--card);
-  color: var(--accent);
-}
-
-.node-action {
-  border-color: transparent;
-  background: none;
-  opacity: 0;
+.node-action:hover,
+.node-action.menu-open {
+  background: rgba(15, 23, 42, 0.07);
+  color: var(--text);
 }
 
 .node:hover .node-action,
+.node:focus-within .node-action,
 .node-action.sticky,
-.node-action:focus-visible {
-  opacity: 1;
+.node-action.add,
+.node-action.menu-open {
+  display: inline-flex;
+}
+
+.node-action.add {
+  color: var(--faint);
+}
+
+.node-action.add:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.node.category .node-action:not(.add) {
+  display: inline-flex;
+  color: var(--faint);
+}
+
+.node.disabled .node-action {
+  visibility: hidden;
 }
 
 .swatch {
   flex: none;
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  border: 1px solid rgba(15, 23, 42, 0.2);
+  width: 14px;
+  height: 14px;
+  margin: 0 1px;
+  border-radius: 4px;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+}
+
+.swatch.round {
+  border-radius: 50%;
+}
+
+/* --- Menu ------------------------------------------------------------------ */
+
+.menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 8px 28px rgba(16, 24, 40, 0.16);
+}
+
+.menu button {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  text-align: left;
+}
+
+.menu button:hover:not(:disabled),
+.menu button:focus-visible {
+  background: var(--page);
+  outline: none;
+}
+
+.menu button .icon {
+  color: var(--muted);
+}
+
+.menu button.danger .icon {
+  color: inherit;
+}
+
+.menu-spacer {
+  width: 15px;
+}
+
+.menu-divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border);
 }
 
 /* --- Panel ----------------------------------------------------------------- */
@@ -813,12 +905,48 @@ button.node-toggle:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 50px;
   padding: 8px 8px 8px 14px;
   border-bottom: 1px solid var(--border);
 }
 
+.panel-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--accent);
+}
+
+.panel-badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.panel-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.panel-footer .footer-buttons {
+  display: contents;
+}
+
+/* Deleting sits apart from the other actions. */
+.panel-footer button.danger {
+  margin-left: auto;
+}
+
 .panel-header h2 {
-  flex: 1;
+  flex: 0 1 auto;
+  margin-right: auto;
   min-width: 0;
   margin: 0;
   font-size: 15px;
@@ -828,10 +956,20 @@ button.node-toggle:hover {
   white-space: nowrap;
 }
 
+.panel-body > *,
+.group-body > * {
+  flex-shrink: 0;
+}
+
+.field input[type='color'] {
+  width: 64px;
+  justify-self: start;
+}
+
 .panel-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   padding: 14px;
   overflow-y: auto;
 }
@@ -897,7 +1035,7 @@ button.node-toggle:hover {
 .group-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   padding-bottom: 14px;
 }
 
@@ -909,7 +1047,12 @@ button.node-toggle:hover {
 
 /* Groups follow each other without the panel's gap, so their lines form a list. */
 .group + .group {
-  margin-top: -12px;
+  margin-top: -10px;
+}
+
+/* A panel that ends on a group needs no extra space under its line. */
+.panel-body > .group:last-child {
+  margin-bottom: -14px;
 }
 
 .slider-edit {
@@ -919,12 +1062,33 @@ button.node-toggle:hover {
   color: var(--text);
 }
 
-.slider-value {
-  width: 76px;
-  height: 22px;
-  padding: 0 4px;
+.slider-edit input.slider-value {
+  width: 64px;
+  height: 26px;
+  padding: 0 6px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.slider-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.slider-control input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.slider-output {
+  flex: none;
+  min-width: 44px;
+  text-align: right;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .hint {
@@ -941,18 +1105,24 @@ button.node-toggle:hover {
   overflow-wrap: anywhere;
 }
 
+/* A setting: name on the left, control on the right. */
 .field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 3px;
+  min-height: 30px;
+}
+
+.field.wide {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .field-label {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 13px;
+  line-height: 1.25;
 }
 
 .field-label output {
@@ -960,12 +1130,92 @@ button.node-toggle:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.field-note {
+  grid-column: 2;
+  color: var(--faint);
+  font-size: 12px;
+}
+
 .field.toggle {
-  flex-direction: row;
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   cursor: pointer;
+}
+
+.field.toggle > span {
+  color: var(--muted);
+}
+
+.caption {
+  margin-bottom: -4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* A number with its name and unit inside the box. */
+.number-box {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--card);
+  cursor: text;
+}
+
+.number-box:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.number-box input[type='number'] {
+  flex: 1;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+
+.number-box input[type='number']:focus-visible {
+  outline: none;
+}
+
+.number-box input::-webkit-inner-spin-button {
+  display: none;
+}
+
+.number-name {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.number-name.axis-x {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.number-name.axis-y {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.number-name.axis-z {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.number-unit {
+  flex: none;
+  color: var(--faint);
+  font-size: 12px;
 }
 
 .field-grid {
@@ -993,6 +1243,57 @@ button.node-toggle:hover {
   padding: 0 8px;
 }
 
+.button-row.start button {
+  flex: 0 0 auto;
+}
+
+/* --- Settings -------------------------------------------------------------- */
+
+.dialog.settings {
+  width: min(460px, 100%);
+}
+
+.dialog-header .panel-icon {
+  margin-right: -2px;
+}
+
+.section-title {
+  margin: 4px 0 -2px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.section-title ~ .section-title {
+  margin-top: 10px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+button.key {
+  min-width: 34px;
+  height: 28px;
+  padding: 0 9px;
+  border-bottom-width: 2px;
+  font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+button.key.recording {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-family: inherit;
+  font-weight: 500;
+}
+
 .input-row input {
   flex: 1;
   min-width: 0;
@@ -1000,12 +1301,31 @@ button.node-toggle:hover {
 
 .notice {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 10px;
-  border-radius: var(--radius);
+  padding: 8px 10px;
+  border-radius: 7px;
   background: var(--accent-soft);
-  font-size: 13px;
+  font-size: 12.5px;
+}
+
+.notice > span {
+  flex: 1 1 140px;
+}
+
+.notice.warning {
+  background: var(--warning-soft);
+  color: #9a3412;
+}
+
+.notice.warning > .icon {
+  align-self: flex-start;
+  margin-top: 1px;
+}
+
+.notice button {
+  background: var(--card);
 }
 
 .button-column {
