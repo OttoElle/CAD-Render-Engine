@@ -120,7 +120,7 @@ let gizmoMode = 'translate';
 $('#fit-btn').append(icon('fit', 16), 'Fit');
 edgesBtn.append(icon('edges', 16), 'Edges');
 axesBtn.append(icon('axes', 16), 'Axes');
-guidesBtn.append(icon('grid', 16), 'Guides');
+guidesBtn.append(icon('guides', 16), 'Guides');
 /** Guide lines over the render frame: { visible, type }, remembered in this browser. */
 const guides = loadGuides();
 guidesBtn.setAttribute('aria-pressed', String(guides.visible));
