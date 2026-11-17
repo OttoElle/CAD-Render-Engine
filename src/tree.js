@@ -154,7 +154,13 @@ export function renderTree(container, actions) {
         detail:
           render.status === 'running'
             ? `${Math.round(render.progress * 100)} %`
-            : `${render.width} × ${render.height}`,
+            : render.status === 'queued'
+              ? 'wartet'
+              : render.status === 'cancelled'
+                ? 'abgebrochen'
+                : render.status === 'failed'
+                  ? 'fehlgeschlagen'
+                  : `${render.width} × ${render.height}`,
         status: render.status === 'running' ? 'running' : render.status === 'done' ? 'ok' : null,
       })),
     },

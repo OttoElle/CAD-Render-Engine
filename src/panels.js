@@ -9,6 +9,7 @@ import {
   QUALITY,
   OUTPUT_SIZES,
   RENDER_DEVICES,
+  TURNTABLE_FRAMES,
   addMaterial,
   materialEntryOf,
   materialEntryLabel,
@@ -26,6 +27,7 @@ import {
 } from './materials.js';
 import { LIGHT_PRESETS, MAX_LIGHT_SIZE, getLightPreset, presetLights } from './environment.js';
 import { EXPLODE_DIRECTIONS } from './explode.js';
+import { FILE_FORMATS, TURN_SECONDS, videoSupported } from './export.js';
 
 const numberFormat = new Intl.NumberFormat('de-DE');
 const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
@@ -1190,6 +1192,17 @@ function outputPanel({ actions }) {
         ),
       ),
       toggle('Transparenter Hintergrund', output.transparent, set('transparent'), 'PNG ohne Hintergrund und Boden'),
+      field(
+        'Dateiformat',
+        selectControl(
+          Object.entries(FILE_FORMATS).map(([key, value]) => [key, value.label]),
+          output.format,
+          set('format'),
+        ),
+      ),
+      output.transparent && output.format === 'jpg'
+        ? h('p', { class: 'hint' }, 'JPG kennt keine Transparenz: Bilder werden beim Speichern auf Weiß gesetzt.')
+        : null,
       toggle('Entrauschen', output.denoise, set('denoise'), 'Glättet das Restrauschen am Ende des Renderings'),
       field(
         'Rendern auf',
@@ -1207,18 +1220,74 @@ function outputPanel({ actions }) {
             'Für Laptops und schwächere Grafikkarten: kleinere Portionen, dafür langsamer',
           )
         : h('p', { class: 'hint' }, 'Ohne Grafikkarte dauert ein Bild ein Vielfaches. Als Notlösung gedacht.'),
-      h('button', { class: 'primary', onclick: actions.startRender }, 'Rendering starten'),
+      ...renderButtons(actions),
     ],
   };
 }
 
+/** Buttons that start renderings: the current view, all saved views, or a turntable series. */
+function renderButtons(actions) {
+  if (!actions.renderSupported) {
+    return [h('p', { class: 'hint error' }, 'Dieser Browser unterstützt kein WebGPU. Bitte Chrome oder Edge verwenden.')];
+  }
+  const { output } = state;
+  const views = state.views.length;
+  return [
+    h('button', { class: 'primary', onclick: actions.startRender }, 'Rendering starten'),
+    h('h3', null, 'Mehrere Bilder'),
+    h(
+      'button',
+      {
+        onclick: actions.renderAllViews,
+        disabled: views === 0,
+        title: views === 0 ? 'Unter „Perspektive“ lassen sich Ansichten speichern' : 'Rendert jede gespeicherte Ansicht nacheinander',
+      },
+      views === 0 ? 'Alle Ansichten rendern (noch keine gespeichert)' : `Alle ${views} Ansichten rendern`,
+    ),
+    field(
+      'Drehteller',
+      selectControl(
+        TURNTABLE_FRAMES.map((frames) => [frames, `${frames} Bilder (alle ${numberFormat.format(360 / frames)}°)`]),
+        output.turntableFrames,
+        (value) => {
+          output.turntableFrames = Number(value);
+          emit('output');
+        },
+      ),
+    ),
+    h(
+      'button',
+      {
+        onclick: actions.renderTurntable,
+        title: 'Das Modell dreht sich einmal um die senkrechte Achse; Kamera und Licht bleiben stehen',
+      },
+      'Drehteller rendern',
+    ),
+    h(
+      'p',
+      { class: 'hint' },
+      `Ein Drehteller wird als Video (eine Umdrehung in ${TURN_SECONDS} Sekunden) oder als Einzelbilder gespeichert. ` +
+        'Je mehr Bilder, desto flüssiger das Video und desto länger das Rendern.',
+    ),
+  ];
+}
+
 function rendersPanel({ actions }) {
+  const done = state.renders.filter((render) => render.status === 'done').length;
+  const queued = state.renders.filter((render) => render.status === 'queued').length;
+  const format = FILE_FORMATS[state.output.format].extension.toUpperCase();
   return {
     title: 'Renderings',
     body: [
-      actions.renderSupported
-        ? h('button', { class: 'primary', onclick: actions.startRender }, 'Rendering starten')
-        : h('p', { class: 'hint error' }, 'Dieser Browser unterstützt kein WebGPU. Bitte Chrome oder Edge verwenden.'),
+      done > 0
+        ? h(
+            'button',
+            { onclick: actions.saveAllRenders, title: 'Alle fertigen Bilder in einer ZIP-Datei, im Format aus „Output“' },
+            `Alle fertigen Bilder speichern (${format}, ZIP)`,
+          )
+        : null,
+      queued > 0 ? h('button', { class: 'danger', onclick: actions.cancelQueue }, `Warteschlange leeren (${queued})`) : null,
+      ...renderButtons(actions),
     ],
   };
 }
@@ -1228,22 +1297,37 @@ function renderPanelFor(render, { actions }) {
   const text = h('p', { class: 'hint' });
   const device = h('p', { class: 'hint' });
   const buttons = h('div', { class: 'button-column' });
+  const count = render.turntable;
+
+  // Time left in a turntable series, from the images finished so far.
+  const remaining = () => {
+    const finished = render.frames.length;
+    if (!count || finished === 0) return '';
+    const spent = render.frames.reduce((sum, frame) => sum + frame.seconds, 0);
+    const current = render.seconds - spent;
+    const left = Math.max((spent / finished) * (count - finished) - current, 0);
+    return ` · noch etwa ${formatDuration(left)}`;
+  };
 
   const update = () => {
     bar.firstChild.style.width = `${Math.round(render.progress * 100)}%`;
     bar.hidden = render.status !== 'running';
     device.hidden = !render.deviceName;
     device.textContent = render.deviceName ? `Gerendert auf: ${render.deviceName}` : '';
+    const image = count ? `Bild ${render.frameIndex + 1} von ${count} · ` : '';
     if (render.status === 'running') {
       text.textContent =
         render.stage === 'rendering'
-          ? `Sample ${Math.floor(render.samples)} von ${render.targetSamples} · ${formatDuration(render.seconds)}`
+          ? `${image}Sample ${Math.floor(render.samples)} von ${render.targetSamples} · ${formatDuration(render.seconds)}${remaining()}`
           : render.stage === 'denoising'
-            ? `Entrauschen … · ${formatDuration(render.seconds)}`
-            : 'Szene wird vorbereitet …';
+            ? `${image}Entrauschen … · ${formatDuration(render.seconds)}${remaining()}`
+            : `${image}Szene wird vorbereitet …`;
+    } else if (render.status === 'queued') {
+      text.textContent = 'Wartet, bis die Renderings davor fertig sind.';
     } else if (render.status === 'done') {
       text.textContent =
-        `Fertig nach ${formatDuration(render.seconds)} · ${Math.round(render.samples)} Samples` +
+        `Fertig nach ${formatDuration(render.seconds)} · ` +
+        (count ? `${render.frames.length} Bilder` : `${Math.round(render.samples)} Samples`) +
         (render.denoised ? ' · entrauscht' : '') +
         (render.note ? ` · ${render.note}` : '');
     } else if (render.status === 'failed') {
@@ -1252,34 +1336,96 @@ function renderPanelFor(render, { actions }) {
       text.textContent = 'Abgebrochen';
     }
   };
-  update();
+
+  // Browsing and playing a finished turntable series.
+  let player = null;
+  if (count && render.status === 'done') {
+    const frames = render.frames.length;
+    const play = h('button', { onclick: () => actions.togglePlaying(render) });
+    const scrub = slider('Bild', {
+      min: 1,
+      max: frames,
+      value: render.shownFrame + 1,
+      format: (value) => `${value} von ${frames}`,
+      oninput: (value) => actions.showFrame(render, value - 1),
+    });
+    player = h('div', null, scrub, h('div', { class: 'button-column' }, play));
+    player.update = () => {
+      scrub.set(render.shownFrame + 1);
+      play.textContent = actions.isPlaying(render) ? 'Anhalten' : 'Abspielen';
+    };
+    player.update();
+  }
 
   if (render.status === 'running') {
+    if (!count) {
+      buttons.append(
+        h(
+          'button',
+          { onclick: () => render.handle?.finishNow(), title: 'Beendet das Rendering mit dem bisher erreichten Stand' },
+          'Jetzt fertigstellen',
+        ),
+      );
+    }
     buttons.append(
       h(
         'button',
-        { onclick: () => render.handle?.finishNow(), title: 'Beendet das Rendering mit dem bisher erreichten Stand' },
-        'Jetzt fertigstellen',
+        { class: 'danger', onclick: () => actions.cancelRender(render), title: count ? 'Fertige Bilder bleiben erhalten' : null },
+        'Abbrechen',
       ),
-      h('button', { class: 'danger', onclick: () => actions.cancelRender(render) }, 'Abbrechen'),
     );
+  } else if (render.status === 'queued') {
+    buttons.append(h('button', { class: 'danger', onclick: () => actions.deleteRender(render) }, 'Aus der Warteschlange nehmen'));
   } else {
     if (render.status === 'done') {
-      buttons.append(h('button', { class: 'primary', onclick: () => actions.saveRender(render) }, 'PNG speichern'));
+      const chosen = state.output.format;
+      if (count) {
+        if (videoSupported()) {
+          buttons.append(h('button', { class: 'primary', onclick: () => actions.saveVideo(render) }, 'Video speichern'));
+        }
+        buttons.append(
+          h(
+            'button',
+            { onclick: () => actions.saveRender(render, chosen) },
+            `Einzelbilder speichern (${FILE_FORMATS[chosen].extension.toUpperCase()}, ZIP)`,
+          ),
+        );
+      } else {
+        // The format chosen under "Output" comes first.
+        for (const format of [chosen, ...Object.keys(FILE_FORMATS).filter((key) => key !== chosen)]) {
+          buttons.append(
+            h(
+              'button',
+              { class: format === chosen ? 'primary' : null, onclick: () => actions.saveRender(render, format) },
+              `${FILE_FORMATS[format].extension.toUpperCase()} speichern`,
+            ),
+          );
+        }
+      }
     }
     buttons.append(h('button', { class: 'danger', onclick: () => actions.deleteRender(render) }, 'Rendering löschen'));
   }
+  update();
 
   return {
     title: render.name,
     body: [
-      h('p', { class: 'hint' }, `${render.width} × ${render.height} Pixel${render.transparent ? ' · transparent' : ''}`),
+      h(
+        'p',
+        { class: 'hint' },
+        `${render.width} × ${render.height} Pixel${render.transparent ? ' · transparent' : ''}` +
+          (count ? ` · ${count} Bilder für eine Umdrehung` : ''),
+      ),
       bar,
       text,
       device,
+      player,
       buttons,
     ],
-    live: update,
+    live: () => {
+      update();
+      player?.update();
+    },
   };
 }
 

@@ -47,7 +47,14 @@ export const defaultOutput = () => ({
   denoise: true,
   device: 'gpu',
   gentle: false,
+  /** File format for saving: 'png' or 'jpg' (see FILE_FORMATS in export.js). */
+  format: 'png',
+  /** Images per turn of a turntable series. */
+  turntableFrames: 36,
 });
+
+/** Choices for the number of images in a turntable series. */
+export const TURNTABLE_FRAMES = [24, 36, 72, 120];
 
 /**
  * Application state for everything the tree shows. The viewer owns the 3D
@@ -139,8 +146,11 @@ export function select(key) {
 
 function clearRenders() {
   for (const render of state.renders) {
+    // Also stops a turntable series and anything still waiting in the queue.
+    render.status = 'cancelled';
     render.handle?.cancel();
     if (render.url) URL.revokeObjectURL(render.url);
+    for (const frame of render.frames || []) URL.revokeObjectURL(frame.url);
   }
   state.renders = [];
 }

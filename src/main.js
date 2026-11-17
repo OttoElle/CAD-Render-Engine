@@ -29,6 +29,15 @@ import {
 import { sectionToPlane } from './section.js';
 import { sceneGradient } from './backdrop.js';
 import { explodeOffsets } from './explode.js';
+import {
+  FILE_FORMATS,
+  TURN_SECONDS,
+  convertImage,
+  downloadBlob,
+  recordVideo,
+  safeFileName,
+  zipFiles,
+} from './export.js';
 import { renderTree, setCollapsed } from './tree.js';
 import { renderPanel, identicalParts } from './panels.js';
 import { h } from './dom.js';
@@ -282,35 +291,27 @@ function runningRender() {
   return state.renders.find((render) => render.status === 'running') || null;
 }
 
-async function beginRender() {
-  if (state.parts.length === 0) return;
-  if (!isRenderSupported()) {
-    select('renders');
-    return;
-  }
-  const active = runningRender();
-  if (active) {
-    select(`render:${active.id}`);
-    setStatus('Es läuft bereits ein Rendering.', { timeout: 3000 });
-    return;
-  }
-
+/**
+ * Puts a rendering into the queue. The camera, the exploded view and the
+ * output settings are taken now; materials, lights and scene as they are when
+ * its turn comes. `view` is a saved view to render instead of the current one,
+ * `turntable` the number of images for a full turn of the model.
+ */
+function queueRender({ name, view = null, turntable = 0 } = {}) {
   const { width, height } = resolveOutputSize();
-  const frame = viewer.getOutputFrame(width / height);
-  const targetSamples = QUALITY[state.output.quality].samples;
-  const onCpu = state.output.device === 'cpu';
+  const output = { ...state.output, width, height };
   const render = {
     id: newId(),
-    name: `Rendering ${state.renders.length + 1}`,
-    status: 'running',
+    name: name || `Rendering ${state.renders.length + 1}`,
+    status: 'queued',
     stage: 'building',
     progress: 0,
     samples: 0,
-    targetSamples,
+    targetSamples: QUALITY[output.quality].samples,
     seconds: 0,
     width,
     height,
-    transparent: state.output.transparent,
+    transparent: output.transparent,
     denoised: false,
     note: null,
     deviceName: null,
@@ -318,70 +319,157 @@ async function beginRender() {
     blob: null,
     url: null,
     error: null,
+    output,
+    view: view
+      ? { position: view.position, target: view.target, fov: view.fov, roll: view.roll, explode: { ...view.explode } }
+      : { ...viewer.getViewState(), explode: { ...state.explode } },
+    // A turntable series keeps all its images; `shownFrame` is the one on screen.
+    turntable: turntable > 0 ? turntable : 0,
+    frames: [],
+    frameIndex: 0,
+    shownFrame: 0,
   };
   state.renders.push(render);
-  select(`render:${render.id}`);
+  return render;
+}
 
+/** Checks whether rendering is possible at all; shows why not otherwise. */
+function canRender() {
+  if (state.parts.length === 0) return false;
+  if (!isRenderSupported()) {
+    select('renders');
+    return false;
+  }
+  return true;
+}
+
+function beginRender() {
+  if (!canRender()) return;
+  const render = queueRender();
+  if (runningRender()) setStatus('Das Rendering startet, sobald das laufende fertig ist.', { timeout: 4000 });
+  select(`render:${render.id}`);
+  runQueue();
+}
+
+/** Queues one rendering for each saved view. */
+function renderAllViews() {
+  if (!canRender() || state.views.length === 0) return;
+  const renders = state.views.map((view) => queueRender({ name: view.name, view }));
+  select(`render:${renders[0].id}`);
+  runQueue();
+}
+
+/** Queues a turntable series: the model turns once, seen from the current camera. */
+function renderTurntable() {
+  if (!canRender()) return;
+  const frames = state.output.turntableFrames;
+  const render = queueRender({ name: `Drehteller ${frames} Bilder`, turntable: frames });
+  select(`render:${render.id}`);
+  runQueue();
+}
+
+/** Starts the next waiting rendering, unless one is running. */
+function runQueue() {
+  if (runningRender()) return;
+  const next = state.renders.find((render) => render.status === 'queued');
+  if (next) runRender(next);
+}
+
+async function runRender(render) {
+  render.status = 'running';
+  render.stage = 'building';
+  emit('renders');
+
+  const { output } = render;
+  const count = render.turntable || 1;
   const started = performance.now();
-  viewer.setHighlight([]);
   try {
     // Loaded on demand so the path tracer does not slow down the start of the app.
     const { startRender } = await import('./render.js');
-    render.handle = await startRender(viewer, {
-      width,
-      height,
-      samples: targetSamples,
-      transparent: render.transparent,
-      backdrop: {
-        floor: state.scene.floor,
-        gradient: state.scene.background === 'gradient' ? sceneGradient(state.scene) : null,
-        coveColor: state.scene.coveColor,
-        reflection: state.scene.reflection,
-        reflectionBlur: state.scene.reflectionBlur,
-      },
-      fov: frame.fov,
-      denoise: state.output.denoise,
-      device: state.output.device,
-      // Software rendering only stays stable with small work packages.
-      gentle: state.output.gentle || onCpu,
-      // A parallel projection has no lens, so it stays sharp throughout.
-      dof:
-        state.camera.dof && !viewer.parallel
-          ? { fStop: state.camera.fStop, focusDistance: focusDistance() }
-          : null,
-      onProgress: ({ stage, progress, samples }) => {
-        render.seconds = (performance.now() - started) / 1000;
-        if (stage === 'denoise-failed') {
-          render.denoised = false;
-          render.note = 'Entrauschen nicht möglich';
-        } else {
-          render.stage = stage;
-          if (stage === 'rendering' && samples !== null) {
-            render.samples = samples;
-            render.progress = Math.min(progress ?? samples / targetSamples, 1);
+    for (let index = 0; index < count && render.status === 'running'; index++) {
+      render.frameIndex = index;
+      const frameStarted = performance.now();
+      render.handle = await startRender(viewer, {
+        width: render.width,
+        height: render.height,
+        samples: render.targetSamples,
+        transparent: render.transparent,
+        backdrop: {
+          floor: state.scene.floor,
+          gradient: state.scene.background === 'gradient' ? sceneGradient(state.scene) : null,
+          coveColor: state.scene.coveColor,
+          reflection: state.scene.reflection,
+          reflectionBlur: state.scene.reflectionBlur,
+        },
+        // Right before the scene is read: show the camera and explosion this rendering was queued with.
+        prepare: () => {
+          if (index === 0) {
+            viewer.applyViewState(render.view);
+            state.explode = { ...render.view.explode };
+            applyExplode();
           }
-          if (stage === 'denoising') {
-            render.denoised = true;
-            render.progress = progress ?? render.progress;
+          return {
+            fov: viewer.getOutputFrame(render.width / render.height).fov,
+            // A parallel projection has no lens, so it stays sharp throughout.
+            dof:
+              state.camera.dof && !viewer.parallel
+                ? { fStop: state.camera.fStop, focusDistance: focusDistance() }
+                : null,
+          };
+        },
+        orbit: render.turntable ? (index / count) * Math.PI * 2 : 0,
+        denoise: output.denoise,
+        device: output.device,
+        // Software rendering only stays stable with small work packages.
+        gentle: output.gentle || output.device === 'cpu',
+        onProgress: ({ stage, progress, samples }) => {
+          render.seconds = (performance.now() - started) / 1000;
+          if (stage === 'denoise-failed') {
+            render.denoised = false;
+            render.note = 'Entrauschen nicht möglich';
+          } else {
+            render.stage = stage;
+            let frameProgress = null;
+            if (stage === 'rendering' && samples !== null) {
+              render.samples = samples;
+              frameProgress = Math.min(progress ?? samples / render.targetSamples, 1);
+            }
+            if (stage === 'denoising') {
+              render.denoised = true;
+              frameProgress = progress ?? null;
+            }
+            if (frameProgress !== null) render.progress = (index + frameProgress) / count;
           }
-        }
-        emit('renders:live');
-      },
-    });
-    render.deviceName = render.handle.deviceName;
-    if (render.status !== 'running') {
-      // Cancelled or deleted while the scene was being prepared.
-      render.handle.cancel();
-      return;
-    }
-    emit('renders');
+          emit('renders:live');
+        },
+      });
+      render.deviceName = render.handle.deviceName;
+      if (render.status !== 'running') {
+        // Cancelled or deleted while the scene was being prepared.
+        render.handle.cancel();
+        break;
+      }
+      if (index === 0) emit('renders');
 
-    const blob = await render.handle.done;
-    render.handle = null;
-    render.seconds = (performance.now() - started) / 1000;
-    if (blob) {
-      render.blob = blob;
-      render.url = URL.createObjectURL(blob);
+      const blob = await render.handle.done;
+      render.handle = null;
+      render.seconds = (performance.now() - started) / 1000;
+      if (!blob) break;
+      if (render.turntable) {
+        render.frames.push({ blob, url: URL.createObjectURL(blob), seconds: (performance.now() - frameStarted) / 1000 });
+        render.shownFrame = index;
+        render.progress = (index + 1) / count;
+        emit('renders:live');
+      } else {
+        render.blob = blob;
+        render.url = URL.createObjectURL(blob);
+      }
+    }
+
+    if (render.turntable ? render.frames.length > 0 : render.blob) {
+      if (render.turntable && render.frames.length < count) {
+        render.note = `abgebrochen nach ${render.frames.length} von ${count} Bildern`;
+      }
       render.status = 'done';
       render.progress = 1;
     } else if (render.status === 'running') {
@@ -394,66 +482,167 @@ async function beginRender() {
     render.error = error?.message || String(error);
   }
   emit('renders');
+  runQueue();
 }
 
 function cancelRender(render) {
-  render.status = 'cancelled';
+  if (render.status === 'queued' || render.status === 'running') render.status = 'cancelled';
   render.handle?.cancel();
   emit('renders');
 }
 
+/** Takes all renderings that have not started yet out of the queue. */
+function cancelQueue() {
+  for (const render of state.renders) if (render.status === 'queued') render.status = 'cancelled';
+  emit('renders');
+}
+
 function deleteRender(render) {
-  if (render.status === 'running') {
+  if (render.status === 'running' || render.status === 'queued') {
     render.status = 'cancelled';
     render.handle?.cancel();
   }
+  if (render === playing) stopPlaying();
   if (render.url) URL.revokeObjectURL(render.url);
+  for (const frame of render.frames) URL.revokeObjectURL(frame.url);
   state.renders = state.renders.filter((other) => other !== render);
   select('renders');
 }
 
-function saveRender(render) {
-  const safe = (text) => text.trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, '-');
-  const base = safe(state.project.name) || safe((state.fileName || 'Modell').replace(/\.(step|stp)$/i, ''));
-  const link = h('a', {
-    href: render.url,
-    download: `${base}_${safe(render.name)}_${render.width}x${render.height}.png`,
+/** Base of all file names: the project's name, or the model's. */
+function fileBase() {
+  return safeFileName(state.project.name) || safeFileName((state.fileName || 'Modell').replace(/\.(step|stp)$/i, ''));
+}
+
+/** The files of a finished rendering: one image, or the numbered images of a turntable series. */
+async function renderFiles(render, format, folder = '') {
+  const { extension } = FILE_FORMATS[format];
+  const name = `${fileBase()}_${safeFileName(render.name)}_${render.width}x${render.height}`;
+  if (!render.turntable) return [{ name: `${folder}${name}.${extension}`, blob: await convertImage(render.blob, format) }];
+  const digits = String(render.frames.length).length;
+  return Promise.all(
+    render.frames.map(async (frame, i) => ({
+      name: `${folder}${name}_${String(i + 1).padStart(Math.max(digits, 3), '0')}.${extension}`,
+      blob: await convertImage(frame.blob, format),
+    })),
+  );
+}
+
+async function exporting(text, run) {
+  setStatus(text);
+  try {
+    await run();
+    setStatus('');
+  } catch (error) {
+    console.error(error);
+    setStatus(`Speichern fehlgeschlagen: ${error?.message || error}`, { error: true, timeout: 6000 });
+  }
+}
+
+/** Saves one rendering in the given format; a turntable series as a ZIP archive. */
+function saveRender(render, format = state.output.format) {
+  return exporting('Bilder werden gespeichert …', async () => {
+    const files = await renderFiles(render, format);
+    if (files.length === 1) downloadBlob(files[0].blob, files[0].name.split('/').pop());
+    else downloadBlob(await zipFiles(files), `${fileBase()}_${safeFileName(render.name)}.zip`);
   });
-  document.body.append(link);
-  link.click();
-  link.remove();
+}
+
+/** Saves all finished renderings in one ZIP archive, turntable series in folders of their own. */
+function saveAllRenders() {
+  const done = state.renders.filter((render) => render.status === 'done');
+  if (done.length === 0) return;
+  return exporting('Bilder werden gespeichert …', async () => {
+    const files = [];
+    for (const render of done) {
+      files.push(...(await renderFiles(render, state.output.format, render.turntable ? `${safeFileName(render.name)}/` : '')));
+    }
+    downloadBlob(await zipFiles(files), `${fileBase()}_Renderings.zip`);
+  });
+}
+
+/** Saves a turntable series as a video of one full turn. */
+function saveVideo(render) {
+  return exporting('Video wird aufgenommen …', async () => {
+    const { blob, extension } = await recordVideo(render.frames.map((frame) => frame.blob));
+    downloadBlob(blob, `${fileBase()}_${safeFileName(render.name)}_${render.width}x${render.height}.${extension}`);
+  });
+}
+
+// --- Turntable playback ---------------------------------------------------------
+
+let playing = null;
+let playTimer = null;
+
+function stopPlaying() {
+  clearInterval(playTimer);
+  playTimer = null;
+  playing = null;
+}
+
+/** Plays a turntable series in the view, at the speed of the video. */
+function togglePlaying(render) {
+  if (playing === render) {
+    stopPlaying();
+  } else {
+    stopPlaying();
+    playing = render;
+    playTimer = setInterval(() => {
+      if (state.selected !== `render:${render.id}`) {
+        stopPlaying();
+        return;
+      }
+      render.shownFrame = (render.shownFrame + 1) % render.frames.length;
+      updateRenderView();
+      panelLive?.();
+    }, (TURN_SECONDS * 1000) / render.frames.length);
+  }
+  panelLive?.();
+}
+
+function showFrame(render, index) {
+  render.shownFrame = Math.min(Math.max(index, 0), render.frames.length - 1);
+  updateRenderView();
 }
 
 /** Shows the selected rendering over the viewport, live while it runs and as an image afterwards. */
 function updateRenderView() {
   const [kind, idText] = state.selected.split(':');
   const render = kind === 'render' ? state.renders.find((item) => item.id === Number(idText)) : null;
-  const content =
-    render?.status === 'done'
-      ? h('img', { src: render.url, alt: render.name })
-      : render?.status === 'running' && render.handle
-        ? render.handle.canvas
-        : null;
-
   renderViewEl.hidden = !render;
   if (!render) {
     renderViewEl.replaceChildren();
     return;
   }
+
+  // A finished image, or the last finished image of a turntable series that is still running.
+  const frame = render.turntable ? render.frames[render.shownFrame] : null;
+  const imageUrl =
+    render.status === 'done' ? (frame?.url ?? render.url) : render.status === 'running' && !render.handle ? frame?.url : null;
   const current = renderViewEl.firstChild;
-  const same =
-    current &&
-    ((content && current === content) ||
-      (content?.tagName === 'IMG' && current.tagName === 'IMG' && current.src === content.src));
-  if (same) return;
-  renderViewEl.replaceChildren(
-    content ||
-      h(
-        'p',
-        { class: 'render-placeholder' },
-        render.status === 'running' ? 'Szene wird vorbereitet …' : 'Kein Bild vorhanden',
-      ),
-  );
+  if (imageUrl) {
+    if (current?.tagName === 'IMG') {
+      // Swapping the source keeps playback free of flicker.
+      if (current.src !== imageUrl) current.src = imageUrl;
+    } else {
+      renderViewEl.replaceChildren(h('img', { src: imageUrl, alt: render.name }));
+    }
+    return;
+  }
+  const canvas = render.status === 'running' ? render.handle?.canvas : null;
+  if (canvas) {
+    if (current !== canvas) renderViewEl.replaceChildren(canvas);
+    return;
+  }
+  const text =
+    render.status === 'running'
+      ? 'Szene wird vorbereitet …'
+      : render.status === 'queued'
+        ? 'Wartet, bis die Renderings davor fertig sind'
+        : 'Kein Bild vorhanden';
+  if (current?.className !== 'render-placeholder' || current.textContent !== text) {
+    renderViewEl.replaceChildren(h('p', { class: 'render-placeholder' }, text));
+  }
 }
 
 // --- Projects and templates ---------------------------------------------------
@@ -698,9 +887,17 @@ const actions = {
   isPickingFocus: () => pickingFocus,
   focusDistance,
   startRender: beginRender,
+  renderAllViews,
+  renderTurntable,
   cancelRender,
+  cancelQueue,
   deleteRender,
   saveRender,
+  saveAllRenders,
+  saveVideo,
+  togglePlaying,
+  isPlaying: (render) => playing === render,
+  showFrame,
   resolveOutputSize,
   fit: () => viewer.fit(),
   closePanel: () => select(''),

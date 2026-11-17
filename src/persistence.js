@@ -10,10 +10,12 @@ import {
   QUALITY,
   OUTPUT_SIZES,
   RENDER_DEVICES,
+  TURNTABLE_FRAMES,
   FLOORS,
 } from './state.js';
 import { getMaterialDef, sanitizeTuning } from './materials.js';
 import { defaultExplode, EXPLODE_DIRECTIONS } from './explode.js';
+import { FILE_FORMATS } from './export.js';
 import { getLightPreset, presetLights, sanitizeLight } from './environment.js';
 
 /**
@@ -211,6 +213,8 @@ export function applySettings(record) {
   if (!OUTPUT_SIZES[state.output.size]) state.output.size = 'view';
   if (!QUALITY[state.output.quality]) state.output.quality = 'standard';
   if (!RENDER_DEVICES[state.output.device]) state.output.device = 'gpu';
+  if (!FILE_FORMATS[state.output.format]) state.output.format = 'png';
+  if (!TURNTABLE_FRAMES.includes(state.output.turntableFrames)) state.output.turntableFrames = 36;
 }
 
 /**

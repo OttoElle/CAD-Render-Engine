@@ -21,6 +21,8 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 8:** Einzelne Softboxen, weitere Lichtvorlagen und Belichtung
 - [x] **Schritt 9:** Farbverläufe, Hohlkehle und spiegelnder Boden
 - [x] **Schritt 10:** Explosionsansicht für Baugruppen
+- [x] **Schritt 11:** Warteschlange, alle Ansichten in einem Rutsch, JPG und
+  Drehteller als Video oder Bildserie
 
 ## Ablauf
 
@@ -74,9 +76,17 @@ die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
 8. **Output:** Bildgröße, Qualität, transparenter Hintergrund, Entrauschen und
    das Rendergerät (Grafikkarte oder CPU). Ein Rahmen in der Ansicht zeigt
    genau den Bildausschnitt, der gerendert wird. Der schonende Modus hilft auf
-   Laptops und schwächeren Grafikkarten.
-9. **Renderings:** Das Plus startet ein Rendering. Fertige Bilder bleiben als
-   Einträge stehen und lassen sich als PNG speichern.
+   Laptops und schwächeren Grafikkarten. Gespeichert wird als PNG oder JPG.
+   „Alle Ansichten rendern“ stellt jede gespeicherte Ansicht in die
+   Warteschlange, „Drehteller rendern“ dreht das Modell einmal um die
+   senkrechte Achse (24 bis 120 Bilder; Kamera und Licht bleiben stehen).
+9. **Renderings:** Das Plus startet ein Rendering. Läuft schon eines, wartet
+   das neue in der Warteschlange; Kamera und Output-Einstellungen gelten so,
+   wie sie beim Einreihen waren, Material und Licht so, wie sie beim Start
+   sind. Fertige Bilder bleiben als Einträge stehen und lassen sich einzeln
+   oder alle zusammen als ZIP speichern. Ein Drehteller lässt sich in der App
+   abspielen und als Video (MP4, sonst WebM; eine Umdrehung in 6 Sekunden)
+   oder als nummerierte Einzelbilder speichern.
 
 Projekte und Vorlagen liegen im Speicher des Browsers (Einstellungen im
 localStorage, STEP- und HDRI-Dateien in IndexedDB). Sie gelten also pro
@@ -133,6 +143,8 @@ Testmodell liegt unter `samples/Bracket.step`.
 - `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen.
 - `src/backdrop.js` baut Boden, Hohlkehle und Farbverläufe für Ansicht und Rendering.
 - `src/explode.js` berechnet die Verschiebungen der Explosionsansicht.
+- `src/export.js` speichert Bilder als PNG oder JPG, packt ZIP-Archive und
+  nimmt Drehteller-Videos auf, ohne zusätzliche Bibliotheken.
 - `src/materials.js` enthält die Materialbibliothek und die Schliffbilder,
   `src/environment.js` erzeugt die Lichtvorlagen und Softboxen als
   HDR-Umgebung direkt im Code.

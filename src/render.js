@@ -25,7 +25,7 @@ const DENOISE_WEIGHTS_URL = `${import.meta.env.BASE_URL}oidn/rt_hdr_alb_nrm_smal
  * Builds a clean copy of the viewer scene for the path tracer: visible parts
  * only, without edges, selection highlight or helper objects.
  */
-function buildRenderScene(viewer, { transparent, backdrop, camera, width, height }) {
+function buildRenderScene(viewer, { transparent, backdrop, camera, width, height, orbit = 0 }) {
   const scene = new THREE.Scene();
 
   const root = new THREE.Group();
@@ -88,6 +88,8 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
 
   scene.environment = viewer.environmentTexture;
   scene.environmentRotation.copy(viewer.scene.environmentRotation);
+  // On a turntable the lights stay with the camera while it circles the model.
+  scene.environmentRotation.y += orbit;
   scene.environmentIntensity = viewer.scene.environmentIntensity;
   const environmentBackground = viewer.showsEnvironmentBackground;
   if (transparent) {
@@ -95,6 +97,7 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
   } else if (environmentBackground) {
     scene.background = viewer.environmentTexture;
     scene.backgroundRotation.copy(viewer.scene.backgroundRotation);
+    scene.backgroundRotation.y += orbit;
     scene.backgroundIntensity = viewer.scene.backgroundIntensity;
   } else {
     scene.background = viewer.backgroundColor.clone();
@@ -107,7 +110,7 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
 
   // An HDRI background brings its own ground, so no floor is added there.
   if (!transparent && !environmentBackground) {
-    if (backdrop.floor === 'shadow') scene.add(buildFloor(viewer, camera, backdrop, width / height));
+    if (backdrop.floor === 'shadow') scene.add(buildFloor(viewer, camera, backdrop, width / height, scene.environmentRotation.y));
     if (backdrop.floor === 'cove') scene.add(buildCove(viewer, camera, backdrop));
   }
 
@@ -124,7 +127,7 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
  * its colour, so it stays seamless apart from reflections of the model and of
  * bright lights.
  */
-function buildFloor(viewer, camera, backdrop, aspect) {
+function buildFloor(viewer, camera, backdrop, aspect, environmentRotation) {
   const { center, radius } = viewer.bounds;
   const groundY = viewer.ground.position.y;
   const geometry = buildFloorGeometry(radius, radius * 60);
@@ -134,7 +137,7 @@ function buildFloor(viewer, camera, backdrop, aspect) {
   const intensity = Math.max(viewer.scene.environmentIntensity, 1e-3);
   const { gradient, reflection, reflectionBlur } = backdrop;
   const sample =
-    reflection > 0 ? environmentSampler(viewer.environmentTexture, viewer.scene.environmentRotation.y) : null;
+    reflection > 0 ? environmentSampler(viewer.environmentTexture, environmentRotation) : null;
   const roughness = floorMaterialParams(reflection, reflectionBlur).roughness;
   // Rough reflections average the environment over a small cone around the mirror direction.
   const spread = Math.tan(Math.atan(roughness * roughness) * 1.5);
@@ -279,8 +282,16 @@ async function requestDevice(kind) {
  * cancelled), `cancel()`, and `finishNow()` to stop early and keep the image
  * accumulated so far.
  */
+/**
+ * Starts a path-traced rendering of what the viewer shows. `prepare`, if
+ * given, runs right before the scene is read and returns { fov, dof }; it can
+ * put the viewer into the state to be rendered. `orbit` (radians) turns the
+ * camera and the lights together around the pivot, as if the model stood on a
+ * turntable. Returns a handle with the live canvas and a `done` promise for
+ * the PNG.
+ */
 export async function startRender(viewer, options) {
-  const { width, height, transparent, backdrop, fov, denoise, gentle, dof, onProgress } = options;
+  const { width, height, transparent, backdrop, denoise, gentle, onProgress, orbit = 0 } = options;
   const gradient = !transparent && !viewer.showsEnvironmentBackground ? backdrop.gradient : null;
   // Test hook for trying settings from the console, e.g. window.__renderDebug = { samples: 4 }.
   const debug = window.__renderDebug;
@@ -305,11 +316,18 @@ export async function startRender(viewer, options) {
   renderer.toneMapping = viewer.renderer.toneMapping;
   renderer.setClearColor(0x000000, 0);
 
+  const { fov, dof } = options.prepare ? options.prepare() : options;
   // With depth of field the camera gets a real aperture; otherwise everything is sharp.
   const camera = dof ? new PhysicalCamera() : new THREE.PerspectiveCamera();
   camera.copy(viewer.camera);
   // The viewport shifts its image to make room for the sidebar; the rendering does not.
   camera.clearViewOffset();
+  if (orbit) {
+    const turn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), orbit);
+    const pivot = viewer.controls.target;
+    camera.position.sub(pivot).applyQuaternion(turn).add(pivot);
+    camera.quaternion.premultiply(turn);
+  }
   camera.aspect = width / height;
   if (fov) camera.fov = fov;
   if (dof) {
@@ -324,7 +342,7 @@ export async function startRender(viewer, options) {
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld(true);
 
-  const scene = buildRenderScene(viewer, { transparent, backdrop, camera, width, height });
+  const scene = buildRenderScene(viewer, { transparent, backdrop, camera, width, height, orbit });
   // While rendering, the gradient shows behind the canvas; at the end it is painted into the image.
   if (gradient) canvas.style.background = renderedGradientCss(gradient);
 
