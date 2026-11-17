@@ -18,7 +18,8 @@ export async function packProject(record, { step, hdri }) {
     exportedAt: new Date().toISOString(),
     step: step ? `model/${step.name}` : null,
     hdri: hdri ? `hdri/${hdri.name}` : null,
-    project: record,
+    // Renderings stay on this computer; their images would make the file large.
+    project: { ...record, renders: [] },
   };
   const entries = [
     { name: 'project.json', blob: new Blob([JSON.stringify(manifest, null, 2)]), compress: true },
@@ -31,7 +32,7 @@ export async function packProject(record, { step, hdri }) {
 
 /** Reads a project file. Resolves to { record, exportedAt, step, hdri } with the files as File objects. */
 export async function unpackProject(file) {
-  const invalid = () => new Error(`„${file.name}“ ist keine Clearcoat-Projektdatei.`);
+  const invalid = () => new Error(`"${file.name}" is not a Clearcoat project file.`);
   let entries;
   try {
     entries = await unzipFiles(file);

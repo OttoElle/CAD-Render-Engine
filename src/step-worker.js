@@ -103,7 +103,7 @@ self.onmessage = async (event) => {
     const occt = await getOcct();
     const result = occt.ReadStepFile(new Uint8Array(buffer), IMPORT_PARAMS);
     if (!result || !result.success) {
-      throw new Error('Die Datei konnte nicht als STEP gelesen werden.');
+      throw new Error('The file could not be read as STEP.');
     }
 
     const transfer = [];

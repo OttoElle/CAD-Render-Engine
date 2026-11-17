@@ -5,12 +5,12 @@ import { icon } from './icons.js';
 // (x right, y down, z towards the viewer). The labels follow CAD convention,
 // where Z is up and "front" looks along +Y, which is world -Z.
 const FACES = [
-  { label: 'Vorne', dir: [0, 0, 1], css: [0, 0, 1], transform: '' },
-  { label: 'Hinten', dir: [0, 0, -1], css: [0, 0, -1], transform: 'rotateY(180deg)' },
-  { label: 'Rechts', dir: [1, 0, 0], css: [1, 0, 0], transform: 'rotateY(90deg)' },
-  { label: 'Links', dir: [-1, 0, 0], css: [-1, 0, 0], transform: 'rotateY(-90deg)' },
-  { label: 'Oben', dir: [0, 1, 0], css: [0, -1, 0], transform: 'rotateX(90deg)' },
-  { label: 'Unten', dir: [0, -1, 0], css: [0, 1, 0], transform: 'rotateX(-90deg)' },
+  { label: 'Front', dir: [0, 0, 1], css: [0, 0, 1], transform: '' },
+  { label: 'Back', dir: [0, 0, -1], css: [0, 0, -1], transform: 'rotateY(180deg)' },
+  { label: 'Right', dir: [1, 0, 0], css: [1, 0, 0], transform: 'rotateY(90deg)' },
+  { label: 'Left', dir: [-1, 0, 0], css: [-1, 0, 0], transform: 'rotateY(-90deg)' },
+  { label: 'Top', dir: [0, 1, 0], css: [0, -1, 0], transform: 'rotateX(90deg)' },
+  { label: 'Bottom', dir: [0, -1, 0], css: [0, 1, 0], transform: 'rotateX(-90deg)' },
 ];
 
 const SIZE = 62;
@@ -57,7 +57,7 @@ export class ViewCube {
       const node = el('button', 'viewcube-face', this.cube);
       node.type = 'button';
       node.textContent = face.label;
-      node.title = `Ansicht ${face.label}`;
+      node.title = `${face.label} view`;
       node.style.transform = `${face.transform} translateZ(${HALF}px)`;
       node.addEventListener('click', () => viewer.lookFrom(new THREE.Vector3(...face.dir)));
       this.faces.push({ face, node });
@@ -95,7 +95,7 @@ export class ViewCube {
             out[b] = sb;
             const node = el('button', 'viewcube-edge', this.cube);
             node.type = 'button';
-            node.title = 'Schrägansicht';
+            node.title = 'Oblique view';
             const x = new THREE.Vector3(...unit[along]);
             const z = new THREE.Vector3(...out).normalize();
             const y = z.clone().cross(x);
@@ -114,7 +114,7 @@ export class ViewCube {
     // The axes are drawn flat on top, so their arrow heads always face the viewer.
     const overlay = svg('svg', { class: 'viewcube-axes', viewBox: '-90 -90 180 180' }, this.scene);
     this.axes = AXES.map((axis) => ({
-      axis,
+      axis: { ...axis },
       line: svg('line', { stroke: axis.color, 'stroke-width': 1.4, 'stroke-linecap': 'round' }, overlay),
       head: svg('polygon', { fill: axis.color }, overlay),
       label: svg('text', { fill: axis.color, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, overlay),
@@ -122,13 +122,13 @@ export class ViewCube {
     for (const { axis, label } of this.axes) label.textContent = axis.name;
 
     const buttons = [
-      { className: 'up', title: 'Nach oben drehen', icon: 'chevronUp', run: () => viewer.orbitBy(0, 15) },
-      { className: 'down', title: 'Nach unten drehen', icon: 'chevronDown', run: () => viewer.orbitBy(0, -15) },
-      { className: 'left', title: 'Nach links drehen', icon: 'chevronLeft', run: () => viewer.orbitBy(-15, 0) },
-      { className: 'right', title: 'Nach rechts drehen', icon: 'chevronRight', run: () => viewer.orbitBy(15, 0) },
-      { className: 'home', title: 'Standardansicht', icon: 'home', run: () => viewer.home() },
-      { className: 'roll-left', title: 'Gegen den Uhrzeigersinn rollen', icon: 'rollLeft', run: () => viewer.rollBy(-15) },
-      { className: 'roll-right', title: 'Im Uhrzeigersinn rollen', icon: 'rollRight', run: () => viewer.rollBy(15) },
+      { className: 'up', title: 'Turn up', icon: 'chevronUp', run: () => viewer.orbitBy(0, 15) },
+      { className: 'down', title: 'Turn down', icon: 'chevronDown', run: () => viewer.orbitBy(0, -15) },
+      { className: 'left', title: 'Turn left', icon: 'chevronLeft', run: () => viewer.orbitBy(-15, 0) },
+      { className: 'right', title: 'Turn right', icon: 'chevronRight', run: () => viewer.orbitBy(15, 0) },
+      { className: 'home', title: 'Default view', icon: 'home', run: () => viewer.home() },
+      { className: 'roll-left', title: 'Roll anticlockwise', icon: 'rollLeft', run: () => viewer.rollBy(-15) },
+      { className: 'roll-right', title: 'Roll clockwise', icon: 'rollRight', run: () => viewer.rollBy(15) },
     ];
     for (const button of buttons) {
       const node = el('button', `viewcube-button ${button.className}`, this.root);
@@ -144,6 +144,18 @@ export class ViewCube {
   }
 
   /** Call whenever the camera moved. */
+  /**
+   * Points the axis arrows the way the CAD axes lie in the scene, after the
+   * model was turned to another up axis. `quaternion` is the model's rotation.
+   */
+  setModelRotation(quaternion) {
+    for (const [i, { axis }] of this.axes.entries()) {
+      const world = new THREE.Vector3().setComponent(i, 1).applyQuaternion(quaternion);
+      axis.css = [world.x, -world.y, world.z].map((value) => Math.round(value));
+    }
+    this.update();
+  }
+
   update() {
     const camera = this.viewer.camera;
     camera.updateMatrixWorld();

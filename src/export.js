@@ -5,8 +5,8 @@
  */
 
 export const FILE_FORMATS = {
-  png: { label: 'PNG (verlustfrei, auch transparent)', extension: 'png', type: 'image/png' },
-  jpg: { label: 'JPG (kleinere Dateien)', extension: 'jpg', type: 'image/jpeg' },
+  png: { label: 'PNG (lossless, can be transparent)', extension: 'png', type: 'image/png' },
+  jpg: { label: 'JPG (smaller files)', extension: 'jpg', type: 'image/jpeg' },
 };
 
 const JPG_QUALITY = 0.92;
@@ -48,7 +48,7 @@ export async function convertImage(blob, format) {
   context.drawImage(bitmap, 0, 0);
   bitmap.close();
   return new Promise((resolve, reject) => {
-    canvas.toBlob((result) => (result ? resolve(result) : reject(new Error('JPG konnte nicht erzeugt werden.'))), 'image/jpeg', JPG_QUALITY);
+    canvas.toBlob((result) => (result ? resolve(result) : reject(new Error('The JPG could not be created.'))), 'image/jpeg', JPG_QUALITY);
   });
 }
 
@@ -145,7 +145,7 @@ export async function zipFiles(files) {
  * deflated entries, which covers our own archives and those of common tools.
  */
 export async function unzipFiles(blob) {
-  const notZip = () => new Error('Die Datei ist kein gültiges Archiv.');
+  const notZip = () => new Error('The file is not a valid archive.');
   // The end record sits in the last 22 bytes, followed by an optional comment of up to 64 KB.
   const tailStart = Math.max(blob.size - 65557, 0);
   const tail = new DataView(await blob.slice(tailStart).arrayBuffer());
@@ -183,14 +183,14 @@ export async function unzipFiles(blob) {
     const data = blob.slice(start, start + compressedSize);
     if (method === 0) files.push({ name, blob: data });
     else if (method === 8) files.push({ name, blob: await pipe(data, new DecompressionStream('deflate-raw')) });
-    else throw new Error(`„${name}“ ist in einem unbekannten Format gepackt.`);
+    else throw new Error(`"${name}" is packed in an unknown format.`);
   }
   return files;
 }
 
 // --- Video ------------------------------------------------------------------------
 
-/** One turn of the turntable takes this long in the video. */
+/** One turn of the turntable takes this long in the video, unless the job says otherwise. */
 export const TURN_SECONDS = 6;
 
 /** The best video format the browser can record: MP4 where possible, otherwise WebM. */
@@ -211,12 +211,12 @@ export const videoSupported = () => videoFormat() !== null;
 
 /**
  * Records the images of a turntable series as a video of one full turn.
- * The browser's recorder works in real time, so this takes TURN_SECONDS.
+ * The browser's recorder works in real time, so this takes `seconds`.
  * Resolves to { blob, extension }.
  */
-export async function recordVideo(blobs, { onProgress } = {}) {
+export async function recordVideo(blobs, { seconds = TURN_SECONDS, onProgress } = {}) {
   const format = videoFormat();
-  if (!format) throw new Error('Dieser Browser kann keine Videos aufnehmen.');
+  if (!format) throw new Error('This browser cannot record videos.');
   const bitmaps = await Promise.all(blobs.map((blob) => createImageBitmap(blob)));
   const { width, height } = bitmaps[0];
   const canvas = document.createElement('canvas');
@@ -233,7 +233,7 @@ export async function recordVideo(blobs, { onProgress } = {}) {
 
   // A steady 30 frames per second plays everywhere; each image is held as long as its share of the turn.
   const fps = 30;
-  const videoFrames = Math.round(TURN_SECONDS * fps);
+  const videoFrames = Math.round(seconds * fps);
   const stream = canvas.captureStream(0);
   const [track] = stream.getVideoTracks();
   const recorder = new MediaRecorder(stream, {

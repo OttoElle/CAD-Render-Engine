@@ -18,7 +18,7 @@ function getWorker() {
     };
     worker.onerror = (event) => {
       for (const entry of pending.values()) {
-        entry.reject(new Error(event.message || 'Der STEP-Import ist abgestürzt.'));
+        entry.reject(new Error(event.message || 'The STEP import crashed.'));
       }
       pending.clear();
       worker = null;
@@ -97,7 +97,7 @@ export async function loadStepFile(file) {
   }
 
   if (parts.length === 0) {
-    throw new Error('Die STEP-Datei enthält keine darstellbare Geometrie.');
+    throw new Error('The STEP file contains no geometry that can be shown.');
   }
   return parts;
 }

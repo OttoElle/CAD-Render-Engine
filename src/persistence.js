@@ -13,10 +13,20 @@ import {
   LEGACY_OUTPUT_SIZES,
   RENDER_DEVICES,
   TURNTABLE_FRAMES,
+  TURNTABLE_SECONDS,
+  JOB_SETTINGS,
+  UP_AXES,
   FLOORS,
+  defaultAdjust,
 } from './state.js';
 import { getMaterialDef, sanitizeTuning } from './materials.js';
-import { defaultExplode, EXPLODE_DIRECTIONS } from './explode.js';
+import {
+  defaultExplode,
+  cloneExplode,
+  EXPLODE_DIRECTIONS,
+  PART_EXPLODE_DIRECTIONS,
+  defaultPartExplode,
+} from './explode.js';
 import { FILE_FORMATS } from './export.js';
 import { getLightPreset, presetLights, sanitizeLight } from './environment.js';
 
@@ -95,7 +105,20 @@ export const fileKeys = {
   hdri: (projectId) => `hdri:${projectId}`,
   templateHdri: (templateId) => `hdri:template:${templateId}`,
   thumbnail: (projectId) => `thumb:${projectId}`,
+  /** A finished rendering: its image, or image `frame` of a turntable series. */
+  render: (projectId, key, frame = null) => `render:${projectId}:${key}${frame === null ? '' : `:${frame}`}`,
+  renderThumbnail: (projectId, key) => `renderthumb:${projectId}:${key}`,
 };
+
+/** Deletes the stored files of a rendering. */
+export function deleteRenderFiles(projectId, meta) {
+  files.delete(fileKeys.renderThumbnail(projectId, meta.key));
+  if (meta.turntable) {
+    for (let i = 0; i < (meta.frameCount || 0); i++) files.delete(fileKeys.render(projectId, meta.key, i));
+  } else {
+    files.delete(fileKeys.render(projectId, meta.key));
+  }
+}
 
 /** Stored files. Failures are not fatal: the project then simply opens without its file. */
 export const files = {
@@ -114,11 +137,108 @@ export const files = {
 
 // --- Snapshots ----------------------------------------------------------------
 
+const validPart = (id) => Number.isInteger(id) && id >= 0 && id < state.parts.length;
+
 function sanitizeExplode(saved) {
   const explode = mergeTyped(defaultExplode(), saved);
   if (!EXPLODE_DIRECTIONS[explode.direction]) explode.direction = 'radial';
   explode.amount = Math.min(Math.max(Number(explode.amount) || 0, 0), 3);
+  if (!validPart(explode.anchor)) explode.anchor = null;
+  const parts = {};
+  for (const [id, item] of Object.entries(saved?.parts || {})) {
+    if (!validPart(Number(id))) continue;
+    const own = mergeTyped(defaultPartExplode(), item);
+    if (!PART_EXPLODE_DIRECTIONS[own.direction]) own.direction = 'auto';
+    own.factor = Math.min(Math.max(Number(own.factor) || 0, 0), 5);
+    parts[id] = own;
+  }
+  explode.parts = parts;
   return explode;
+}
+
+const isVector = (value) => Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
+
+function sanitizeViewState(saved) {
+  if (!saved || !isVector(saved.position) || !isVector(saved.target)) return null;
+  return {
+    position: saved.position,
+    target: saved.target,
+    fov: Number.isFinite(saved.fov) ? saved.fov : 35,
+    roll: Number.isFinite(saved.roll) ? saved.roll : 0,
+  };
+}
+
+/** Checks image and file settings, as used by the output defaults and by render jobs. */
+function sanitizeImageSettings(settings) {
+  if (!OUTPUT_ASPECTS[settings.aspect]) settings.aspect = 'view';
+  if (!OUTPUT_RESOLUTIONS[settings.resolution]) settings.resolution = 1920;
+  for (const key of ['width', 'height']) settings[key] = Math.min(Math.max(Math.round(Number(settings[key]) || 1920), 64), 8192);
+  if (!QUALITY[settings.quality]) settings.quality = 'standard';
+  if (!FILE_FORMATS[settings.format]) settings.format = 'png';
+  if (!TURNTABLE_FRAMES.includes(settings.turntableFrames)) settings.turntableFrames = 36;
+  if (!TURNTABLE_SECONDS.includes(settings.turntableSeconds)) settings.turntableSeconds = 6;
+  return settings;
+}
+
+function sanitizeJob(saved) {
+  const camera = sanitizeViewState(saved?.camera);
+  if (!camera) return null;
+  const defaults = defaultOutput();
+  const job = {
+    id: newId(),
+    name: typeof saved.name === 'string' && saved.name.trim() ? saved.name : 'Render job',
+    type: saved.type === 'animation' ? 'animation' : 'image',
+    camera,
+    explode: sanitizeExplode(saved.explode),
+  };
+  for (const key of JOB_SETTINGS) job[key] = typeof saved[key] === typeof defaults[key] ? saved[key] : defaults[key];
+  return sanitizeImageSettings(job);
+}
+
+/** Metadata of a stored rendering, as kept in the project record. */
+export function sanitizeRenderMeta(saved) {
+  if (!saved || typeof saved.key !== 'string') return null;
+  const adjust = mergeTyped(defaultAdjust(), saved.adjust);
+  return {
+    key: saved.key,
+    name: String(saved.name || 'Rendering'),
+    width: Number(saved.width) || 0,
+    height: Number(saved.height) || 0,
+    seconds: Number(saved.seconds) || 0,
+    samples: Number(saved.samples) || 0,
+    denoised: Boolean(saved.denoised),
+    transparent: Boolean(saved.transparent),
+    note: typeof saved.note === 'string' ? saved.note : null,
+    deviceName: typeof saved.deviceName === 'string' ? saved.deviceName : null,
+    turntable: Number(saved.turntable) || 0,
+    frameCount: Number(saved.frameCount) || 0,
+    turntableSeconds: TURNTABLE_SECONDS.includes(saved.turntableSeconds) ? saved.turntableSeconds : 6,
+    format: FILE_FORMATS[saved.format] ? saved.format : 'png',
+    createdAt: Number(saved.createdAt) || Date.now(),
+    adjust,
+  };
+}
+
+/** What is kept of a finished rendering in the project record; the images are in IndexedDB. */
+export function renderMeta(render) {
+  return {
+    key: render.key,
+    name: render.name,
+    width: render.width,
+    height: render.height,
+    seconds: render.seconds,
+    samples: render.samples,
+    denoised: render.denoised,
+    transparent: render.transparent,
+    note: render.note,
+    deviceName: render.deviceName,
+    turntable: render.turntable,
+    frameCount: render.turntable ? render.frames.length : 0,
+    turntableSeconds: render.turntableSeconds,
+    format: render.format,
+    createdAt: render.createdAt,
+    adjust: { ...render.adjust },
+  };
 }
 
 /** Copies `saved` over `defaults`, ignoring unknown keys and values of the wrong type. */
@@ -158,9 +278,12 @@ function modelSnapshot() {
       target,
       fov,
       roll,
-      explode: { ...explode },
+      explode: cloneExplode(explode),
     })),
-    explode: { ...state.explode },
+    explode: cloneExplode(state.explode),
+    upAxis: state.upAxis,
+    partOffsets: Object.fromEntries(state.partOffsets),
+    jobs: state.jobs.map(({ id, ...job }) => ({ ...job, explode: cloneExplode(job.explode) })),
     sections: state.sections.map(({ name, axis, position, flip, enabled, uncut }) => ({
       name,
       axis,
@@ -184,9 +307,21 @@ function blankRecord(name) {
     partCount: 0,
     materials: [],
     views: [],
+    jobs: [],
+    renders: [],
     hidden: [],
     view: null,
   };
+}
+
+/**
+ * The whole project as plain data, for taking back changes made in a panel.
+ * applySettings and applyModelData restore it.
+ */
+export function snapshotProject() {
+  return JSON.parse(
+    JSON.stringify({ ...settingsSnapshot(), ...(state.parts.length > 0 ? modelSnapshot() : {}) }),
+  );
 }
 
 function syncSummaries() {
@@ -198,6 +333,7 @@ function syncSummaries() {
     partCount: project.fileName ? project.partCount || 0 : 0,
     materialCount: project.fileName ? (project.materials || []).length : 0,
     viewCount: project.fileName ? (project.views || []).length : 0,
+    renderCount: (project.renders || []).length,
   }));
   state.templates = templates.map(({ id, name }) => ({ id, name }));
 }
@@ -218,7 +354,6 @@ export function applySettings(record) {
   if (state.lighting.presetId !== 'custom') {
     state.lighting.presetId = getLightPreset(state.lighting.presetId).id;
     state.lighting.hdriName = null;
-    if (state.scene.background === 'environment') state.scene.background = 'light';
   }
   // Projects from before editable softboxes get the lights of their preset.
   const savedLights = record.lighting?.lights;
@@ -235,12 +370,8 @@ export function applySettings(record) {
   const legacy = record.output && record.output.aspect === undefined ? LEGACY_OUTPUT_SIZES[record.output.size] : null;
   if (legacy) [state.output.aspect, state.output.resolution] = legacy;
   delete state.output.size;
-  if (!OUTPUT_ASPECTS[state.output.aspect]) state.output.aspect = 'view';
-  if (!OUTPUT_RESOLUTIONS[state.output.resolution]) state.output.resolution = 1920;
-  if (!QUALITY[state.output.quality]) state.output.quality = 'standard';
+  sanitizeImageSettings(state.output);
   if (!RENDER_DEVICES[state.output.device]) state.output.device = 'gpu';
-  if (!FILE_FORMATS[state.output.format]) state.output.format = 'png';
-  if (!TURNTABLE_FRAMES.includes(state.output.turntableFrames)) state.output.turntableFrames = 36;
 }
 
 /**
@@ -250,15 +381,22 @@ export function applySettings(record) {
  */
 export function applyModelData(record) {
   if (!record || record.fileName !== state.fileName || record.partCount !== state.parts.length) return null;
-  const valid = (id) => Number.isInteger(id) && id >= 0 && id < state.parts.length;
+  const valid = validPart;
   state.materials = (record.materials || []).map((entry) => restoreEntry(entry, (entry.partIds || []).filter(valid)));
   state.views = (record.views || []).map((view) => ({ id: newId(), ...view, explode: sanitizeExplode(view.explode) }));
   state.explode = sanitizeExplode(record.explode);
+  state.upAxis = UP_AXES[record.upAxis] ? record.upAxis : '+Z';
+  state.partOffsets = new Map(
+    Object.entries(record.partOffsets || {})
+      .map(([id, offset]) => [Number(id), offset])
+      .filter(([id, offset]) => valid(id) && isVector(offset)),
+  );
+  state.jobs = (record.jobs || []).map(sanitizeJob).filter(Boolean);
   state.sections = (record.sections || [])
     .filter((section) => [0, 1, 2].includes(section.axis) && Number.isFinite(section.position))
     .map((section) => ({
       id: newId(),
-      name: String(section.name || 'Schnitt'),
+      name: String(section.name || 'Section'),
       axis: section.axis,
       position: section.position,
       flip: Boolean(section.flip),
@@ -334,7 +472,12 @@ export function saveNow() {
   if (suspended || !index) return;
   const record = currentRecord();
   if (!record) return;
-  const changes = { name: state.project.name.trim() || 'Projekt', ...settingsSnapshot() };
+  const changes = {
+    name: state.project.name.trim() || 'Project',
+    ...settingsSnapshot(),
+    // Renderings belong to the project, also while its model is missing.
+    renders: state.renders.filter((render) => render.stored).map(renderMeta),
+  };
   // Without a model the last saved model data stays, so a failed load loses nothing.
   if (state.parts.length > 0) Object.assign(changes, modelSnapshot());
   // Only real changes count for "last modified"; moving the camera does not.
@@ -369,7 +512,7 @@ export function currentRecord() {
 export function initProjects() {
   index = read(PROJECTS_KEY);
   if (!index || !Array.isArray(index.projects) || index.projects.length === 0) {
-    const first = blankRecord('Projekt 1');
+    const first = blankRecord('Project 1');
     const legacy = read(LEGACY_SETTINGS_KEY);
     if (legacy) {
       first.lighting = legacy.lighting;
@@ -394,11 +537,21 @@ function uniqueName(base, taken) {
   return `${base} ${number}`;
 }
 
-export function createProject() {
+/** A name for a new project that is not taken yet. */
+export function nextProjectName() {
   const names = index.projects.map((project) => project.name);
   let number = index.projects.length + 1;
-  while (names.includes(`Projekt ${number}`)) number += 1;
-  const record = blankRecord(`Projekt ${number}`);
+  while (names.includes(`Project ${number}`)) number += 1;
+  return `Project ${number}`;
+}
+
+export function createProject(name = nextProjectName()) {
+  const record = blankRecord(
+    uniqueName(
+      name.trim() || nextProjectName(),
+      index.projects.map((project) => project.name),
+    ),
+  );
   index.projects.push(record);
   write(PROJECTS_KEY, index);
   syncSummaries();
@@ -411,9 +564,11 @@ export async function duplicateProject(id) {
   const record = JSON.parse(JSON.stringify(source));
   record.id = uid();
   record.name = uniqueName(
-    `${source.name} Kopie`,
+    `${source.name} copy`,
     index.projects.map((project) => project.name),
   );
+  // Renderings stay with the original; their images are large.
+  record.renders = [];
   await files.copy(fileKeys.step(source.id), fileKeys.step(record.id));
   await files.copy(fileKeys.hdri(source.id), fileKeys.hdri(record.id));
   await files.copy(fileKeys.thumbnail(source.id), fileKeys.thumbnail(record.id));
@@ -426,11 +581,13 @@ export async function duplicateProject(id) {
 
 /** Deletes a project and returns the one that is current afterwards. */
 export function deleteProject(id) {
+  const record = getProject(id);
   index.projects = index.projects.filter((project) => project.id !== id);
   files.delete(fileKeys.step(id));
   files.delete(fileKeys.hdri(id));
   files.delete(fileKeys.thumbnail(id));
-  if (index.projects.length === 0) index.projects.push(blankRecord('Projekt 1'));
+  for (const meta of record?.renders || []) deleteRenderFiles(id, meta);
+  if (index.projects.length === 0) index.projects.push(blankRecord('Project 1'));
   if (!currentRecord()) index.currentId = index.projects[0].id;
   write(PROJECTS_KEY, index);
   syncSummaries();
@@ -442,6 +599,29 @@ export function getProject(id) {
   return index.projects.find((project) => project.id === id) || null;
 }
 
+/** Renames a stored project; the name stays unique. */
+export function renameProject(id, name) {
+  const record = getProject(id);
+  const trimmed = name.trim();
+  if (!record || !trimmed || trimmed === record.name) return record;
+  record.name = uniqueName(
+    trimmed,
+    index.projects.filter((project) => project !== record).map((project) => project.name),
+  );
+  record.modifiedAt = Date.now();
+  write(PROJECTS_KEY, index);
+  syncSummaries();
+  return record;
+}
+
+/** Stores changed render metadata (e.g. image adjustments) of any project. */
+export function updateRenderMeta(projectId, key, changes) {
+  const meta = getProject(projectId)?.renders?.find((item) => item.key === key);
+  if (!meta) return;
+  Object.assign(meta, changes);
+  write(PROJECTS_KEY, index);
+}
+
 /**
  * Stores a project read from a project file, with its STEP model and HDRI.
  * With `replace`, it overwrites the project with the same id (the same
@@ -449,10 +629,12 @@ export function getProject(id) {
  * a new id if that one is taken, and under a free name.
  */
 export async function importProject(data, { step, hdri, replace }) {
-  const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : 'Importiertes Projekt';
-  const record = { ...blankRecord(name), ...data, name };
+  const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : 'Imported project';
+  // Project files carry no renderings.
+  const record = { ...blankRecord(name), ...data, name, renders: [] };
   const existing = replace ? getProject(data.id) : null;
   if (existing) {
+    for (const meta of existing.renders || []) deleteRenderFiles(existing.id, meta);
     index.projects = index.projects.map((project) => (project === existing ? record : project));
   } else {
     if (typeof data.id !== 'string' || getProject(data.id)) record.id = uid();

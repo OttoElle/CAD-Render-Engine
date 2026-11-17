@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -14,9 +14,9 @@
       <header id="topbar">
         <img class="brand" src="/logo/clearcoat-logo.svg" alt="Clearcoat" />
         <nav class="breadcrumb" aria-label="Navigation">
-          <button id="projects-btn" title="Alle Projekte">Projekte</button>
+          <button id="projects-btn" title="All projects">Projects</button>
           <span class="breadcrumb-separator" aria-hidden="true">›</span>
-          <button id="project-chip" title="Projekt"></button>
+          <button id="project-chip" title="Name and template of this project"></button>
         </nav>
       </header>
       <main id="stage">
@@ -25,18 +25,19 @@
         <div id="focus-marker" hidden></div>
         <div id="dropzone">
           <div class="dropzone-inner">
-            <strong>STEP-Datei hierher ziehen</strong>
-            <span>oder unter „Geometrie“ öffnen (.step, .stp)</span>
+            <strong>Drop a STEP file here</strong>
+            <span>or open one under Geometry (.step, .stp)</span>
           </div>
         </div>
         <div id="render-view" hidden></div>
         <aside id="sidebar">
-          <nav id="tree" aria-label="Arbeitsschritte"></nav>
+          <nav id="tree" aria-label="Steps"></nav>
         </aside>
         <section id="panel" hidden></section>
         <div id="toolbar" hidden>
-          <button id="fit-btn" title="Modell einpassen (F)"></button>
-          <button id="edges-btn" title="Kanten ein- und ausblenden (E)" aria-pressed="true"></button>
+          <button id="fit-btn" title="Fit the model into the view (F)"></button>
+          <button id="edges-btn" title="Show or hide edges (E)" aria-pressed="true"></button>
+          <button id="axes-btn" title="Show or hide the coordinate system (A)" aria-pressed="false"></button>
         </div>
         <div id="viewcube-host" hidden></div>
         <section id="overview" hidden></section>

@@ -6,11 +6,15 @@ import {
   select,
   withIds,
   FLOORS,
+  BACKGROUND_COLORS,
+  UP_AXES,
   QUALITY,
   OUTPUT_ASPECTS,
   OUTPUT_RESOLUTIONS,
   RENDER_DEVICES,
   TURNTABLE_FRAMES,
+  TURNTABLE_SECONDS,
+  defaultAdjust,
   addMaterial,
   materialEntryOf,
   materialEntryLabel,
@@ -27,13 +31,15 @@ import {
   isDefaultTuning,
 } from './materials.js';
 import { LIGHT_PRESETS, MAX_LIGHT_SIZE, getLightPreset, presetLights } from './environment.js';
-import { EXPLODE_DIRECTIONS } from './explode.js';
-import { FILE_FORMATS, TURN_SECONDS, videoSupported } from './export.js';
+import { EXPLODE_DIRECTIONS, PART_EXPLODE_DIRECTIONS, partExplode, setPartExplode } from './explode.js';
+import { FILE_FORMATS, videoSupported } from './export.js';
+import { ADJUSTMENTS, isNeutral } from './adjust.js';
 
-const numberFormat = new Intl.NumberFormat('de-DE');
+const numberFormat = new Intl.NumberFormat('en-US');
 const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
 const FOCAL_MIN = 15;
 const FOCAL_MAX = 200;
+const NO_WEBGPU = 'This browser does not support WebGPU. Please use Chrome or Edge.';
 
 /** Whether assigning one part also assigns all identical parts (e.g. all screws of one size). */
 let linkIdentical = true;
@@ -60,6 +66,32 @@ function selectControl(options, value, onchange) {
   for (const [optionValue, label] of options) node.add(new Option(label, optionValue));
   node.value = value;
   return node;
+}
+
+/** A row of buttons of which exactly one is chosen. `options` are [value, label, icon?]. */
+function segmented(label, options, value, onchange) {
+  return h(
+    'div',
+    { class: 'field' },
+    label ? h('span', { class: 'field-label' }, label) : null,
+    h(
+      'div',
+      { class: 'segmented', role: 'radiogroup', 'aria-label': label },
+      options.map(([optionValue, text, iconName]) =>
+        h(
+          'button',
+          {
+            class: optionValue === value ? 'on' : '',
+            role: 'radio',
+            'aria-checked': String(optionValue === value),
+            onclick: () => optionValue !== value && onchange(optionValue),
+          },
+          iconName ? icon(iconName, 15) : null,
+          text,
+        ),
+      ),
+    ),
+  );
 }
 
 /** A labelled on/off switch. */
@@ -179,28 +211,12 @@ function numberBox(label, { value, step = 1, min, max, digits = 1, onchange }) {
   return node;
 }
 
-/** A button that asks for a second click before it runs. */
-function confirmButton(label, run) {
-  let armed = false;
-  let timer = null;
-  const node = h(
-    'button',
-    {
-      class: 'danger',
-      onclick: () => {
-        if (armed) return run();
-        armed = true;
-        node.textContent = 'Wirklich löschen?';
-        timer = setTimeout(() => {
-          armed = false;
-          node.textContent = label;
-        }, 3000);
-        return timer;
-      },
-    },
-    label,
-  );
-  return node;
+function textField(label, value, oninput) {
+  return field(label, h('input', { type: 'text', value, oninput: (event) => oninput(event.target.value) }));
+}
+
+function deleteButton(label, run) {
+  return h('button', { class: 'danger', onclick: run }, label);
 }
 
 function formatDuration(seconds) {
@@ -210,107 +226,79 @@ function formatDuration(seconds) {
 
 const plural = (count, one, many) => `${numberFormat.format(count)} ${count === 1 ? one : many}`;
 
-// --- Panels -------------------------------------------------------------------
+const percent = (value) => `${value} %`;
 
-function projectPanel({ actions }) {
-  const templateName = h('input', {
-    type: 'text',
-    placeholder: 'Name der Vorlage',
-    onkeydown: (event) => event.key === 'Enter' && saveTemplate(),
-  });
-  function saveTemplate() {
-    const name = templateName.value.trim();
-    if (!name) {
-      templateName.focus();
-      return;
-    }
-    actions.saveTemplate(name);
-  }
-
-  return {
-    title: 'Projekt',
-    body: [
-      field(
-        'Name',
-        h('input', {
-          type: 'text',
-          value: state.project.name,
-          oninput: (event) => {
-            state.project.name = event.target.value;
-            emit('project:live');
-          },
-        }),
-      ),
-      h(
-        'div',
-        { class: 'button-row' },
-        h('button', { onclick: actions.openOverview }, 'Alle Projekte'),
-        h(
-          'button',
-          {
-            onclick: () => actions.exportProject(),
-            title: 'Speichert das Projekt samt STEP-Modell und eigener HDRI als .clearcoat-Datei, z. B. für einen anderen Rechner',
-          },
-          'Exportieren',
-        ),
-      ),
-      h('h3', null, 'Vorlagen'),
-      state.templates.length > 0
-        ? h(
-            'ul',
-            { class: 'item-list static' },
-            state.templates.map((template) =>
-              h(
-                'li',
-                null,
-                h('span', { class: 'item-name' }, template.name),
-                h('button', { class: 'small', onclick: () => actions.applyTemplate(template.id) }, 'Anwenden'),
-                h(
-                  'button',
-                  {
-                    class: 'icon-button',
-                    title: 'Vorlage löschen',
-                    'aria-label': 'Vorlage löschen',
-                    onclick: () => actions.deleteTemplate(template.id),
-                  },
-                  icon('trash', 15),
-                ),
-              ),
-            ),
-          )
-        : null,
-      h(
-        'div',
-        { class: 'input-row', title: 'Speichert Materialien, Szene, Licht, Kamera und Output zur Wiederverwendung in anderen Projekten' },
-        templateName,
-        h('button', { onclick: saveTemplate }, 'Speichern'),
-      ),
-    ],
-  };
-}
+// --- Geometry -----------------------------------------------------------------
 
 function geometryPanel({ actions }) {
   if (state.parts.length === 0) {
     return {
-      title: 'Geometrie',
-      body: [h('button', { class: 'primary', onclick: actions.openFile }, 'STEP-Datei öffnen …')],
+      title: 'Geometry',
+      editable: false,
+      body: [
+        h('p', { class: 'hint' }, 'Drop a STEP file anywhere on the window, or open one here.'),
+        h('button', { class: 'primary', onclick: actions.openFile }, 'Open STEP file …'),
+      ],
     };
   }
 
   const triangles = state.parts.reduce((sum, part) => sum + part.triangles, 0);
   const hidden = state.parts.filter((part) => !part.mesh.visible).length;
+  const moved = state.partOffsets.size;
   return {
-    title: 'Geometrie',
+    title: 'Geometry',
     body: [
       h('div', { class: 'file-name' }, state.fileName),
       h(
         'p',
         { class: 'hint' },
-        `${plural(state.parts.length, 'Bauteil', 'Bauteile')} · ${plural(triangles, 'Dreieck', 'Dreiecke')}` +
-          (hidden > 0 ? ` · ${hidden} ausgeblendet` : ''),
+        `${plural(state.parts.length, 'part', 'parts')} · ${plural(triangles, 'triangle', 'triangles')}` +
+          (hidden > 0 ? ` · ${hidden} hidden` : ''),
       ),
-      hidden > 0 ? h('button', { onclick: actions.showAllParts }, 'Alle einblenden') : null,
-      h('button', { onclick: actions.openFile }, 'Andere STEP-Datei öffnen …'),
+      hidden > 0 ? h('button', { onclick: actions.showAllParts }, 'Show all parts') : null,
+      h('button', { onclick: actions.openFile }, 'Open another STEP file …'),
+      group('coordinates', 'Coordinate system', [
+        field(
+          'Up axis',
+          selectControl(Object.entries(UP_AXES), state.upAxis, (value) => {
+            state.upAxis = value;
+            emit('geometry');
+          }),
+        ),
+        h(
+          'p',
+          { class: 'hint' },
+          'Which CAD axis points up in the scene. The floor, the turntable and the lighting follow it.',
+        ),
+        toggle('Show axes', actions.axesVisible(), actions.toggleAxes, 'X red, Y green, Z blue, from the CAD origin (A)'),
+        moved > 0
+          ? [
+              h('p', { class: 'hint' }, `${plural(moved, 'part', 'parts')} moved from the CAD position.`),
+              h(
+                'button',
+                {
+                  onclick: () => {
+                    state.partOffsets.clear();
+                    emit('geometry');
+                  },
+                },
+                'Put all parts back',
+              ),
+            ]
+          : null,
+      ]),
+    ],
+  };
+}
+
+function partsPanel({ actions }) {
+  const hidden = state.parts.filter((part) => !part.mesh.visible).length;
+  return {
+    title: 'Parts',
+    editable: false,
+    body: [
+      h('p', { class: 'hint' }, 'Click a part in the viewport or in the tree to open it.'),
+      hidden > 0 ? h('button', { onclick: actions.showAllParts }, `Show all parts (${hidden} hidden)`) : null,
     ],
   };
 }
@@ -332,51 +320,134 @@ function partPanel(part, { actions }) {
     }
   };
 
+  // Position: an offset from where the CAD model puts the part.
+  const offset = () => state.partOffsets.get(part.id) || [0, 0, 0];
+  const positionBoxes = ['X', 'Y', 'Z'].map((axis, i) =>
+    numberBox(`${axis} mm`, {
+      value: offset()[i],
+      step: 1,
+      digits: 2,
+      onchange: (value) => {
+        const next = [...offset()];
+        next[i] = value;
+        actions.setPartOffset(part.id, next);
+      },
+    }),
+  );
+  const moving = actions.isGizmoOn(part.id);
+
+  const own = partExplode(state.explode, part.id);
+  const setOwn = (changes) => {
+    setPartExplode(state.explode, part.id, changes);
+    emit('explode');
+  };
+
   return {
     title: part.label,
     body: [
-      toggle('Sichtbar', part.mesh.visible, () => actions.togglePart(part.id)),
+      toggle('Visible', part.mesh.visible, () => actions.togglePart(part.id)),
       field(
         'Material',
         selectControl(
           [
-            ['cad', 'CAD-Farbe'],
+            ['cad', 'CAD colour'],
             ...state.materials.map((item) => [String(item.id), materialEntryLabel(item)]),
-            ['new', 'Neues Material …'],
+            ['new', 'New material …'],
           ],
           entry ? String(entry.id) : 'cad',
           assign,
         ),
       ),
       copies > 1
-        ? toggle(`Gleiche Bauteile gemeinsam (${copies})`, linkIdentical, (checked) => {
+        ? toggle(`Identical parts together (${copies})`, linkIdentical, (checked) => {
             linkIdentical = checked;
           })
         : null,
-      entry ? h('button', { onclick: () => select(`material:${entry.id}`) }, 'Material bearbeiten') : null,
+      entry ? h('button', { onclick: () => select(`material:${entry.id}`) }, 'Edit material') : null,
       h(
         'div',
         { class: 'button-row' },
-        h('button', { onclick: () => actions.isolatePart(part.id) }, 'Nur dieses zeigen'),
-        h('button', { onclick: actions.showAllParts }, 'Alle einblenden'),
+        h('button', { onclick: () => actions.isolatePart(part.id) }, 'Show only this'),
+        h('button', { onclick: actions.showAllParts }, 'Show all'),
       ),
-      h('p', { class: 'hint' }, plural(part.triangles, 'Dreieck', 'Dreiecke')),
+      group('part-position', 'Position', [
+        h('p', { class: 'hint' }, 'Offset from the CAD position, along the CAD axes.'),
+        h('div', { class: 'field-grid three' }, positionBoxes),
+        h(
+          'div',
+          { class: 'button-row' },
+          h(
+            'button',
+            {
+              class: moving ? 'active' : '',
+              onclick: () => actions.toggleGizmo(part.id),
+              title: 'Drag the arrows in the viewport to move the part',
+            },
+            icon('move', 15),
+            moving ? 'Stop moving' : 'Move',
+          ),
+          h(
+            'button',
+            { onclick: () => actions.setPartOffset(part.id, null), disabled: !state.partOffsets.has(part.id) },
+            'Reset',
+          ),
+        ),
+      ]),
+      state.parts.length > 1
+        ? group(
+            'part-explode',
+            'Exploded view',
+            [
+              toggle('Stays in place', own.fixed || state.explode.anchor === part.id, (checked) => setOwn({ fixed: checked }), 'The part does not move when the assembly is exploded'),
+              toggle(
+                'Centre of the explosion',
+                state.explode.anchor === part.id,
+                (checked) => {
+                  state.explode.anchor = checked ? part.id : null;
+                  emit('explode');
+                },
+                'The other parts move away from this one',
+              ),
+              field('Direction', selectControl(Object.entries(PART_EXPLODE_DIRECTIONS), own.direction, (value) => setOwn({ direction: value }))),
+              slider('Distance', {
+                min: 0,
+                max: 300,
+                step: 5,
+                value: Math.round(own.factor * 100),
+                format: (value) => `${value} % of the others`,
+                oninput: (value) => {
+                  setPartExplode(state.explode, part.id, { factor: value / 100 });
+                  emit('explode:live');
+                },
+                onchange: () => emit('explode'),
+              }),
+              state.explode.amount === 0
+                ? h('p', { class: 'hint' }, 'Set how far the assembly is exploded under Camera or in a render job.')
+                : null,
+            ],
+            { open: false },
+          )
+        : null,
+      h('p', { class: 'hint' }, plural(part.triangles, 'triangle', 'triangles')),
     ],
+    live: () => positionBoxes.forEach((box, i) => box.set(offset()[i])),
   };
 }
+
+// --- Sections -------------------------------------------------------------------
 
 function sectionsPanel({ actions }) {
   const cap = state.sectionCap;
   return {
-    title: 'Schnitte',
+    title: 'Sections',
     body: [
-      h('button', { class: 'primary', onclick: actions.addSection }, 'Schnitt anlegen'),
+      h('button', { class: 'primary', onclick: actions.addSection }, 'Add section'),
       field(
-        'Schnittflächen',
+        'Cut faces',
         selectControl(
           [
-            ['material', 'Wie das Bauteil'],
-            ['color', 'Eigene Farbe'],
+            ['material', 'Like the part'],
+            ['color', 'Own colour'],
           ],
           cap.mode,
           (value) => {
@@ -387,7 +458,7 @@ function sectionsPanel({ actions }) {
       ),
       cap.mode === 'color'
         ? field(
-            'Farbe',
+            'Colour',
             h('input', {
               type: 'color',
               value: cap.color,
@@ -416,27 +487,20 @@ function sectionPanel(section, { viewer, actions }) {
   };
 
   return {
-    title: 'Schnitt',
+    title: section.name,
     body: [
+      textField('Name', section.name, (value) => {
+        section.name = value || 'Section';
+        emit('sections:live');
+      }),
+      toggle('Active', section.enabled, set('enabled')),
       field(
-        'Name',
-        h('input', {
-          type: 'text',
-          value: section.name,
-          oninput: (event) => {
-            section.name = event.target.value || 'Schnitt';
-            emit('sections:live');
-          },
-        }),
-      ),
-      toggle('Aktiv', section.enabled, set('enabled')),
-      field(
-        'Ebene senkrecht zu',
+        'Plane at right angles to',
         selectControl(
           [
-            ['0', 'X-Achse'],
-            ['1', 'Y-Achse'],
-            ['2', 'Z-Achse'],
+            ['0', 'X axis'],
+            ['1', 'Y axis'],
+            ['2', 'Z axis'],
           ],
           String(section.axis),
           (value) => {
@@ -461,14 +525,10 @@ function sectionPanel(section, { viewer, actions }) {
         },
         onchange: () => emit('sections'),
       }),
-      toggle('Andere Seite zeigen', section.flip, set('flip')),
+      toggle('Show the other side', section.flip, set('flip')),
       state.parts.length > 1
-        ? [
-            h(
-              'h3',
-              { title: 'Abgewählte Bauteile bleiben ganz, zum Beispiel Schrauben oder Wellen' },
-              `Geschnittene Bauteile (${state.parts.length - section.uncut.size})`,
-            ),
+        ? group('section-parts', `Cut parts (${state.parts.length - section.uncut.size})`, [
+            h('p', { class: 'hint' }, 'Click parts in the viewport to leave them whole, e.g. screws or shafts.'),
             h(
               'div',
               { class: 'button-row' },
@@ -480,7 +540,7 @@ function sectionPanel(section, { viewer, actions }) {
                     emit('sections');
                   },
                 },
-                'Alle',
+                'Cut all',
               ),
               h(
                 'button',
@@ -490,10 +550,10 @@ function sectionPanel(section, { viewer, actions }) {
                     emit('sections');
                   },
                 },
-                'Keine',
+                'Cut none',
               ),
             ),
-            toggle('Gleiche Bauteile gemeinsam', linkIdentical, (checked) => {
+            toggle('Identical parts together', linkIdentical, (checked) => {
               linkIdentical = checked;
             }),
             partList(
@@ -514,29 +574,24 @@ function sectionPanel(section, { viewer, actions }) {
               ],
               actions,
             ),
-          ]
+          ])
         : null,
-      h(
-        'button',
-        {
-          class: 'danger',
-          onclick: () => {
-            state.sections = state.sections.filter((other) => other !== section);
-            select('sections');
-          },
-        },
-        'Schnitt löschen',
-      ),
+      deleteButton('Delete section', () => {
+        state.sections = state.sections.filter((other) => other !== section);
+        select('sections');
+      }),
     ],
   };
 }
 
+// --- Materials --------------------------------------------------------------------
+
 function materialsPanel({ actions }) {
   return {
-    title: 'Materialien',
+    title: 'Materials',
     body: [
-      h('button', { class: 'primary', onclick: actions.addMaterial }, 'Material anlegen'),
-      h('p', { class: 'hint' }, 'Bauteile ohne Material behalten ihre CAD-Farbe.'),
+      h('button', { class: 'primary', onclick: actions.addMaterial }, 'Add material'),
+      h('p', { class: 'hint' }, 'Parts without a material keep their CAD colour.'),
     ],
   };
 }
@@ -554,8 +609,10 @@ function partList(parts, renderItem, actions) {
 function cadMaterialPanel({ actions }) {
   const parts = state.parts.filter((part) => !materialEntryOf(part.id));
   return {
-    title: 'CAD-Farben',
+    title: 'CAD colours',
+    editable: false,
     body: [
+      h('p', { class: 'hint' }, 'These parts have no material yet and keep the colour from the CAD file.'),
       partList(
         parts,
         (part) => [
@@ -582,6 +639,33 @@ function materialSelect(value, onchange) {
   return node;
 }
 
+/** The parts assigned to something, as removable chips like a selection box. */
+function selectionBox(partIds, onRemove, actions, empty) {
+  const parts = state.parts.filter((part) => partIds.has(part.id));
+  if (parts.length === 0) return h('div', { class: 'selection-box empty' }, empty);
+  return h(
+    'ul',
+    { class: 'selection-box', onmouseleave: () => actions.hover(null) },
+    parts.map((part) =>
+      h(
+        'li',
+        { onmouseenter: () => actions.hover([part.id]), title: part.label },
+        h('span', { class: 'part-name' }, part.label),
+        h(
+          'button',
+          {
+            class: 'icon-button small',
+            title: 'Remove',
+            'aria-label': `Remove ${part.label}`,
+            onclick: () => onRemove(part),
+          },
+          icon('close', 12),
+        ),
+      ),
+    ),
+  );
+}
+
 function materialPanel(entry, { actions }) {
   const def = getMaterialDef(entry.materialId);
   const { tuning } = entry;
@@ -594,7 +678,7 @@ function materialPanel(entry, { actions }) {
       min: 0,
       max: 100,
       value: Math.round(tuning[key] * 100),
-      format: (value) => `${value} %`,
+      format: percent,
       title,
       oninput: (value) => tune(key)(value / 100),
       onchange: () => emit('materials'),
@@ -602,7 +686,7 @@ function materialPanel(entry, { actions }) {
   const modified = entry.colorHex !== def.color || !isDefaultTuning(entry.materialId, tuning);
 
   return {
-    title: 'Material',
+    title: materialEntryLabel(entry),
     body: [
       field(
         'Material',
@@ -614,7 +698,7 @@ function materialPanel(entry, { actions }) {
         }),
       ),
       field(
-        'Farbe',
+        'Colour',
         h('input', {
           type: 'color',
           value: entry.colorHex,
@@ -624,12 +708,12 @@ function materialPanel(entry, { actions }) {
           },
         }),
       ),
-      group('material-tuning', 'Feinabstimmung', [
-        tuneSlider('Rauheit', 'roughness', 'Niedrig spiegelt, hoch streut das Licht'),
-        tuneSlider('Metallisch', 'metalness', 'Metalle stehen auf 100 %, Kunststoffe und Lacke auf 0 %'),
-        tuneSlider('Klarlack', 'clearcoat', 'Glänzende Schicht über dem Material'),
+      group('material-tuning', 'Fine tuning', [
+        tuneSlider('Roughness', 'roughness', 'Low mirrors, high scatters the light'),
+        tuneSlider('Metallic', 'metalness', 'Metals are at 100 %, plastics and paints at 0 %'),
+        tuneSlider('Clear coat', 'clearcoat', 'A glossy layer on top of the material'),
         field(
-          'Oberfläche',
+          'Surface',
           selectControl(
             Object.entries(FINISHES).map(([key, value]) => [key, value.label]),
             tuning.finish,
@@ -639,82 +723,89 @@ function materialPanel(entry, { actions }) {
         tuning.finish !== 'none'
           ? [
               field(
-                tuning.finish === 'turned' ? 'Drehachse' : 'Schliffrichtung',
+                tuning.finish === 'turned' ? 'Turning axis' : 'Brushing direction',
                 selectControl(Object.entries(FINISH_AXES), tuning.finishAxis, tune('finishAxis', false)),
               ),
-              slider('Ausprägung', {
+              slider('Strength', {
                 min: 0,
                 max: 100,
                 value: Math.round(tuning.finishStrength * 100),
-                format: (value) => `${value} %`,
-                title: 'Wie stark die Spiegelungen quer zu den Riefen verwischen',
+                format: percent,
+                title: 'How much the reflections smear across the marks',
                 oninput: (value) => tune('finishStrength')(value / 100),
                 onchange: () => emit('materials'),
               }),
             ]
           : null,
-        modified
-          ? h(
-              'button',
-              {
-                class: 'link',
-                onclick: () => {
-                  entry.colorHex = def.color;
-                  entry.tuning = defaultTuning(entry.materialId);
-                  emit('materials');
-                },
-              },
-              'Auf Vorgabe zurücksetzen',
-            )
-          : null,
-      ]),
-      group('material-parts', `Bauteile (${entry.partIds.size})`, [
-        h('p', { class: 'hint' }, 'Hier anhaken oder direkt im Modell anklicken.'),
-        h(
-          'div',
-          { class: 'button-row' },
-          h('button', { onclick: () => setPartsAssigned(entry, state.parts.map((p) => p.id), true) }, 'Alle'),
-          h('button', { onclick: () => setPartsAssigned(entry, [...entry.partIds], false) }, 'Keine'),
-        ),
-        toggle('Gleiche Bauteile gemeinsam', linkIdentical, (checked) => {
-          linkIdentical = checked;
-        }),
-        partList(
-          state.parts,
-          (part) => {
-            const owner = materialEntryOf(part.id);
-            return [
-              h('input', {
-                type: 'checkbox',
-                checked: owner === entry,
-                onchange: (event) =>
-                  setPartsAssigned(entry, identicalParts(part).map((p) => p.id), event.target.checked),
-              }),
-              h('span', { class: 'part-name' }, part.label),
-              owner && owner !== entry ? h('span', { class: 'part-owner' }, materialEntryLabel(owner)) : null,
-            ];
-          },
-          actions,
-        ),
       ]),
       h(
         'button',
         {
-          class: 'danger',
+          disabled: !modified,
+          title: modified ? `Colour and fine tuning as in the library for ${def.label}` : 'Already at the defaults',
           onclick: () => {
-            removeMaterial(entry.id);
-            select('materials');
+            entry.colorHex = def.color;
+            entry.tuning = defaultTuning(entry.materialId);
+            emit('materials');
           },
         },
-        'Material löschen',
+        icon('undo', 15),
+        'Reset to defaults',
       ),
+      group('material-parts', `Assigned parts (${entry.partIds.size})`, [
+        h('p', { class: 'hint' }, 'Click parts in the viewport to add or remove them.'),
+        selectionBox(
+          entry.partIds,
+          (part) => setPartsAssigned(entry, identicalParts(part).map((item) => item.id), false),
+          actions,
+          'No parts yet',
+        ),
+        h(
+          'div',
+          { class: 'button-row' },
+          h('button', { onclick: () => setPartsAssigned(entry, state.parts.map((p) => p.id), true) }, 'All parts'),
+          h('button', { onclick: () => setPartsAssigned(entry, [...entry.partIds], false), disabled: entry.partIds.size === 0 }, 'Clear list'),
+        ),
+        toggle('Identical parts together', linkIdentical, (checked) => {
+          linkIdentical = checked;
+        }),
+        group(
+          'material-pick-list',
+          'Pick from list',
+          [
+            partList(
+              state.parts,
+              (part) => {
+                const owner = materialEntryOf(part.id);
+                return [
+                  h('input', {
+                    type: 'checkbox',
+                    checked: owner === entry,
+                    onchange: (event) =>
+                      setPartsAssigned(entry, identicalParts(part).map((p) => p.id), event.target.checked),
+                  }),
+                  h('span', { class: 'part-name' }, part.label),
+                  owner && owner !== entry ? h('span', { class: 'part-owner' }, materialEntryLabel(owner)) : null,
+                ];
+              },
+              actions,
+            ),
+          ],
+          { open: false },
+        ),
+      ]),
+      deleteButton('Delete material', () => {
+        removeMaterial(entry.id);
+        select('materials');
+      }),
     ],
   };
 }
 
-function scenePanel() {
+// --- Scene ------------------------------------------------------------------------
+
+function scenePanel({ actions }) {
   const { scene } = state;
-  const isCustom = scene.background.startsWith('#');
   const environment = scene.background === 'environment';
   const set = (key, live = false) => (value) => {
     scene[key] = value;
@@ -722,104 +813,116 @@ function scenePanel() {
   };
   const colorField = (label, key) =>
     field(label, h('input', { type: 'color', value: scene[key], oninput: (event) => set(key, true)(event.target.value) }));
+  const custom = scene.background.startsWith('#');
+  const colorKind = custom ? 'custom' : scene.background;
 
   return {
-    title: 'Szene',
+    title: 'Scene',
     body: [
-      field(
-        'Hintergrund',
-        selectControl(
-          [
-            ['light', 'Hell'],
-            ['white', 'Weiß'],
-            ['grey', 'Grau'],
-            ['dark', 'Dunkel'],
-            ['custom', 'Eigene Farbe'],
-            ['gradient', 'Farbverlauf'],
-            ...(state.lighting.presetId === 'custom' ? [['environment', 'HDRI-Umgebung']] : []),
-          ],
-          isCustom ? 'custom' : scene.background,
-          (value) => set('background')(value === 'custom' ? '#dfe6ee' : value),
-        ),
+      segmented(
+        'Background',
+        [
+          ['color', 'Colour'],
+          ['environment', 'Scene'],
+        ],
+        environment ? 'environment' : 'color',
+        (value) => set('background')(value === 'environment' ? 'environment' : 'light'),
       ),
-      isCustom
-        ? field(
-            'Farbe',
-            h('input', {
-              type: 'color',
-              value: scene.background,
-              oninput: (event) => set('background', true)(event.target.value),
-            }),
-          )
-        : null,
-      scene.background === 'gradient'
-        ? [
-            field(
-              'Verlauf',
-              selectControl(
-                [
-                  ['linear', 'Von oben nach unten'],
-                  ['radial', 'Von der Mitte nach außen'],
-                ],
-                scene.gradientType,
-                set('gradientType'),
-              ),
-            ),
-            h(
-              'div',
-              { class: 'field-grid two' },
-              colorField(scene.gradientType === 'radial' ? 'Mitte' : 'Oben', 'gradientFrom'),
-              colorField(scene.gradientType === 'radial' ? 'Rand' : 'Unten', 'gradientTo'),
-            ),
-          ]
-        : null,
       environment
-        ? null
+        ? [
+            h(
+              'p',
+              { class: 'hint' },
+              state.lighting.presetId === 'custom'
+                ? `The HDRI "${state.lighting.hdriName}" shows behind the model and brings its own ground.`
+                : 'The lighting studio shows behind the model. For a photo background, load an HDRI file.',
+            ),
+            h('button', { onclick: actions.loadHdri }, state.lighting.presetId === 'custom' ? 'Other HDRI file …' : 'Load HDRI file …'),
+          ]
         : [
             field(
-              'Boden',
-              selectControl(Object.entries(FLOORS), scene.floor, set('floor')),
+              'Colour',
+              selectControl(
+                [...Object.entries(BACKGROUND_COLORS), ['custom', 'Own colour'], ['gradient', 'Gradient']],
+                colorKind,
+                (value) => set('background')(value === 'custom' ? '#dfe6ee' : value),
+              ),
             ),
-            scene.floor === 'cove' ? colorField('Farbe der Hohlkehle', 'coveColor') : null,
-            scene.floor !== 'none'
+            custom
+              ? field(
+                  'Own colour',
+                  h('input', { type: 'color', value: scene.background, oninput: (event) => set('background', true)(event.target.value) }),
+                )
+              : null,
+            scene.background === 'gradient'
               ? [
-                  slider('Spiegelung', {
-                    min: 0,
-                    max: 100,
-                    value: Math.round(scene.reflection * 100),
-                    format: (value) => `${value} %`,
-                    title: 'Der Boden spiegelt Modell und Licht. Auf dunklem Hintergrund passt eine dunkle Lichtvorlage',
-                    oninput: (value) => set('reflection', true)(value / 100),
-                    onchange: () => emit('scene'),
-                  }),
-                  scene.reflection > 0
-                    ? slider('Unschärfe der Spiegelung', {
-                        min: 0,
-                        max: 100,
-                        value: Math.round(scene.reflectionBlur * 100),
-                        format: (value) => `${value} %`,
-                        title: 'Nur im Rendering sichtbar',
-                        oninput: (value) => set('reflectionBlur', true)(value / 100),
-                      })
-                    : null,
+                  field(
+                    'Gradient',
+                    selectControl(
+                      [
+                        ['linear', 'Top to bottom'],
+                        ['radial', 'Centre outwards'],
+                      ],
+                      scene.gradientType,
+                      set('gradientType'),
+                    ),
+                  ),
+                  h(
+                    'div',
+                    { class: 'field-grid two' },
+                    colorField(scene.gradientType === 'radial' ? 'Centre' : 'Top', 'gradientFrom'),
+                    colorField(scene.gradientType === 'radial' ? 'Edge' : 'Bottom', 'gradientTo'),
+                  ),
                 ]
               : null,
           ],
+      environment
+        ? null
+        : group('scene-floor', 'Floor', [
+            field('Shape', selectControl(Object.entries(FLOORS), scene.floor, set('floor'))),
+            scene.floor === 'cove' ? colorField('Colour of the cove', 'coveColor') : null,
+            scene.floor === 'shadow' ? h('p', { class: 'hint' }, 'The floor blends into the background and only shows shadows and reflections.') : null,
+          ]),
+      !environment && scene.floor !== 'none'
+        ? group('scene-reflection', 'Reflections', [
+            slider('Reflection', {
+              min: 0,
+              max: 100,
+              value: Math.round(scene.reflection * 100),
+              format: (value) => (value === 0 ? 'off' : percent(value)),
+              title: 'How strongly the floor mirrors the model and the light. On a dark background a dark lighting preset fits',
+              oninput: (value) => set('reflection', true)(value / 100),
+              onchange: () => emit('scene'),
+            }),
+            scene.reflection > 0
+              ? slider('Blur', {
+                  min: 0,
+                  max: 100,
+                  value: Math.round(scene.reflectionBlur * 100),
+                  format: (value) => (value === 0 ? 'sharp mirror' : percent(value)),
+                  title: 'Sharp like a mirror, or soft like a glossy surface',
+                  oninput: (value) => set('reflectionBlur', true)(value / 100),
+                })
+              : null,
+          ])
+        : null,
     ],
   };
 }
 
-const evFormat = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 1, signDisplay: 'exceptZero' });
+// --- Lighting -----------------------------------------------------------------------
+
+const evFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1, signDisplay: 'exceptZero' });
 
 function lightingPanel({ actions }) {
   const { lighting } = state;
   return {
-    title: 'Beleuchtung',
+    title: 'Lighting',
     body: [
       field(
-        'Vorlage',
+        'Preset',
         selectControl(
-          [...LIGHT_PRESETS.map((preset) => [preset.id, preset.label]), ['custom', 'Eigene HDRI-Datei …']],
+          [...LIGHT_PRESETS.map((preset) => [preset.id, preset.label]), ['custom', 'Own HDRI file …']],
           lighting.presetId,
           (value) => {
             if (value === 'custom') {
@@ -832,7 +935,6 @@ function lightingPanel({ actions }) {
             lighting.hdriName = null;
             // A preset brings its own softboxes, which replace the current ones.
             lighting.lights = withIds(presetLights(getLightPreset(value)));
-            if (state.scene.background === 'environment') state.scene.background = 'light';
             emit('lighting');
           },
         ),
@@ -840,33 +942,33 @@ function lightingPanel({ actions }) {
       lighting.presetId === 'custom'
         ? [
             h('div', { class: 'file-name' }, lighting.hdriName),
-            h('button', { onclick: actions.loadHdri }, 'Andere HDRI-Datei …'),
+            h('button', { onclick: actions.loadHdri }, 'Other HDRI file …'),
           ]
         : null,
-      slider('Drehung', {
+      slider('Rotation', {
         min: -180,
         max: 180,
         value: lighting.rotation,
         format: (value) => `${value}°`,
-        title: 'Dreht alle Lichter um das Modell',
+        title: 'Turns all lights around the model',
         oninput: (value) => {
           lighting.rotation = value;
           emit('lighting:live');
         },
       }),
       // Exposure in thirds of a stop, like a camera. Each stop doubles the light.
-      slider('Belichtung', {
+      slider('Exposure', {
         min: -9,
         max: 9,
         value: Math.round(Math.log2(lighting.intensity) * 3),
         format: (value) => `${evFormat.format(value / 3)} EV`,
-        title: 'Heller oder dunkler in Blendenstufen, der Hintergrund bleibt',
+        title: 'Brighter or darker in stops; the background stays',
         oninput: (value) => {
           lighting.intensity = 2 ** (value / 3);
           emit('lighting:live');
         },
       }),
-      h('button', { class: 'primary', onclick: actions.addLight }, 'Softbox anlegen'),
+      h('button', { class: 'primary', onclick: actions.addLight }, 'Add softbox'),
     ],
   };
 }
@@ -886,44 +988,37 @@ function lightPanel(light, { actions }) {
   const picking = actions.isPickingHighlight(light);
 
   return {
-    title: 'Softbox',
+    title: light.name,
     body: [
-      field(
-        'Name',
-        h('input', {
-          type: 'text',
-          value: light.name,
-          oninput: (event) => {
-            light.name = event.target.value || 'Softbox';
-            emit('lighting:live');
-          },
-        }),
-      ),
-      toggle('Aktiv', light.enabled, set('enabled', false)),
+      textField('Name', light.name, (value) => {
+        light.name = value || 'Softbox';
+        emit('lighting:live');
+      }),
+      toggle('Active', light.enabled, set('enabled', false)),
       group('light-position', 'Position', [
         h(
           'button',
           {
             class: picking ? 'active' : '',
             onclick: () => actions.pickHighlight(light),
-            title: 'Setzt die Softbox so, dass ihr Glanzlicht auf dem angeklickten Punkt liegt',
+            title: 'Places the softbox so that its highlight lands on the clicked point',
           },
-          picking ? 'Punkt im Modell anklicken …' : 'Glanzlicht setzen',
+          picking ? 'Click a point on the model …' : 'Place highlight',
         ),
-        angle('Richtung', 'az', -180, 180, '0° ist vorne, 90° rechts'),
-        angle('Höhe', 'el', -30, 90, '0° ist auf Höhe des Modells, 90° direkt darüber'),
+        angle('Direction', 'az', -180, 180, '0° is the front, 90° the right'),
+        angle('Height', 'el', -30, 90, '0° is level with the model, 90° straight above'),
       ]),
-      group('light-size', 'Fläche', [
-        slider('Breite', {
+      group('light-size', 'Size', [
+        slider('Width', {
           min: 1,
           max: MAX_LIGHT_SIZE,
           step: SIZE_STEPS,
           value: light.width,
           format: (value) => `${value}°`,
-          title: 'Größere Softboxen geben weichere Schatten bei gleicher Lichtmenge',
+          title: 'Larger softboxes give softer shadows at the same amount of light',
           oninput: set('width'),
         }),
-        slider('Höhe', {
+        slider('Height', {
           min: 1,
           max: MAX_LIGHT_SIZE,
           step: SIZE_STEPS,
@@ -932,19 +1027,19 @@ function lightPanel(light, { actions }) {
           oninput: set('height'),
         }),
         field(
-          'Form',
+          'Shape',
           selectControl(
             [
-              ['rect', 'Rechteckig'],
-              ['round', 'Rund'],
+              ['rect', 'Rectangular'],
+              ['round', 'Round'],
             ],
             light.round ? 'round' : 'rect',
             (value) => set('round', false)(value === 'round'),
           ),
         ),
       ]),
-      group('light-power', 'Licht', [
-        slider('Leistung', {
+      group('light-power', 'Light', [
+        slider('Power', {
           min: -50,
           max: 150,
           value: toSlider(light.power),
@@ -952,7 +1047,7 @@ function lightPanel(light, { actions }) {
           oninput: (value) => set('power')(fromSlider(value)),
         }),
         field(
-          'Farbe',
+          'Colour',
           h('input', {
             type: 'color',
             value: light.color,
@@ -960,20 +1055,15 @@ function lightPanel(light, { actions }) {
           }),
         ),
       ]),
-      h(
-        'button',
-        {
-          class: 'danger',
-          onclick: () => {
-            state.lighting.lights = state.lighting.lights.filter((other) => other !== light);
-            select('lighting');
-          },
-        },
-        'Softbox löschen',
-      ),
+      deleteButton('Delete softbox', () => {
+        state.lighting.lights = state.lighting.lights.filter((other) => other !== light);
+        select('lighting');
+      }),
     ],
   };
 }
+
+// --- Camera -----------------------------------------------------------------------
 
 function viewsPanel({ viewer, actions }) {
   const { camera } = state;
@@ -985,28 +1075,28 @@ function viewsPanel({ viewer, actions }) {
   const fromSlider = (value) => FOCAL_MIN * (FOCAL_MAX / FOCAL_MIN) ** (value / 100);
   const clampFocal = (focal) => Math.min(Math.max(focal, FOCAL_MIN), FOCAL_MAX);
   const focalText = (focal) => (viewer.parallel ? 'parallel' : `${Math.round(focal)} mm`);
-  const focal = slider('Brennweite', {
+  const focal = slider('Focal length', {
     min: 0,
     max: 100,
     step: 0.5,
     value: toSlider(clampFocal(viewer.focalLength)),
     format: (value) => focalText(fromSlider(value)),
     disabled: parallel,
-    title: 'Lange Brennweiten zeigen Bauteile mit wenig perspektivischer Verzerrung',
+    title: 'Long focal lengths show parts with little perspective distortion',
     oninput: (value) => viewer.setFocalLength(fromSlider(value)),
   });
 
   const boxes = {
-    azimuth: numberBox('Drehung °', { value: pose.azimuth, step: 5, onchange: (value) => viewer.setPose({ azimuth: value }) }),
-    elevation: numberBox('Höhe °', {
+    azimuth: numberBox('Turn °', { value: pose.azimuth, step: 5, onchange: (value) => viewer.setPose({ azimuth: value }) }),
+    elevation: numberBox('Height °', {
       value: pose.elevation,
       step: 5,
       min: -90,
       max: 90,
       onchange: (value) => viewer.setPose({ elevation: value }),
     }),
-    roll: numberBox('Rollen °', { value: pose.roll, step: 5, onchange: (value) => viewer.setPose({ roll: value }) }),
-    distance: numberBox('Abstand mm', {
+    roll: numberBox('Roll °', { value: pose.roll, step: 5, onchange: (value) => viewer.setPose({ roll: value }) }),
+    distance: numberBox('Distance mm', {
       value: pose.distance,
       step: 10,
       min: 0.1,
@@ -1027,7 +1117,7 @@ function viewsPanel({ viewer, actions }) {
 
   const focusText = h('p', { class: 'hint' });
   const updateFocus = () => {
-    focusText.textContent = `Fokus: ${camera.focusPoint ? 'gewählter Punkt' : 'Drehpunkt'} · ${numberFormat.format(
+    focusText.textContent = `Focus: ${camera.focusPoint ? 'chosen point' : 'pivot'} · ${numberFormat.format(
       Math.round(actions.focusDistance()),
     )} mm`;
   };
@@ -1035,79 +1125,84 @@ function viewsPanel({ viewer, actions }) {
   const picking = actions.isPickingFocus();
 
   return {
-    title: 'Perspektive',
+    title: 'Camera',
     body: [
       focal,
-      toggle('Parallelprojektion', parallel, (checked) => {
+      toggle('Parallel projection', parallel, (checked) => {
         viewer.setParallel(checked);
         emit('views');
       }),
       h(
         'div',
         { class: 'button-row' },
-        h('button', { onclick: () => viewer.fit() }, 'Einpassen'),
-        h('button', { onclick: () => viewer.home() }, 'Standardansicht'),
+        h('button', { onclick: () => viewer.fit() }, 'Fit'),
+        h('button', { onclick: () => viewer.home() }, 'Default view'),
       ),
       group(
         'camera-numbers',
-        'Kamera in Zahlen',
+        'Camera in numbers',
         [
-          h('div', { class: 'field-grid two', title: '0° ist die Ansicht von vorne, 90° von rechts' }, boxes.azimuth, boxes.elevation, boxes.roll, boxes.distance),
-          h('p', { class: 'hint', title: 'Punkt im Modell, um den die Kamera dreht' }, 'Drehpunkt (mm)'),
+          h('div', { class: 'field-grid two', title: '0° is the front view, 90° the right' }, boxes.azimuth, boxes.elevation, boxes.roll, boxes.distance),
+          h('p', { class: 'hint', title: 'The point the camera looks at and turns around' }, 'Target (mm)'),
           h('div', { class: 'field-grid three' }, targetBoxes),
         ],
         { open: false },
       ),
-      group('depth-of-field', 'Tiefenunschärfe', [
-        toggle(
-          'Im Rendering anwenden',
-          camera.dof,
-          (checked) => {
-            camera.dof = checked;
-            emit('camera');
-          },
-          'Die Echtzeit-Ansicht bleibt scharf',
-        ),
-        camera.dof
-          ? [
-              slider('Blende', {
-                min: 0,
-                max: F_STOPS.length - 1,
-                value: Math.max(F_STOPS.indexOf(camera.fStop), 0),
-                format: (value) => `f/${F_STOPS[value]}`,
-                title: 'Kleine Blendenzahl bedeutet stärkere Unschärfe',
-                oninput: (value) => {
-                  camera.fStop = F_STOPS[value];
-                  emit('camera:live');
-                },
-              }),
-              focusText,
-              h(
-                'div',
-                { class: 'button-row' },
+      group(
+        'depth-of-field',
+        'Depth of field',
+        [
+          toggle(
+            'Use in the rendering',
+            camera.dof,
+            (checked) => {
+              camera.dof = checked;
+              emit('camera');
+            },
+            'The real-time view stays sharp',
+          ),
+          camera.dof
+            ? [
+                slider('Aperture', {
+                  min: 0,
+                  max: F_STOPS.length - 1,
+                  value: Math.max(F_STOPS.indexOf(camera.fStop), 0),
+                  format: (value) => `f/${F_STOPS[value]}`,
+                  title: 'A small f-number means more blur',
+                  oninput: (value) => {
+                    camera.fStop = F_STOPS[value];
+                    emit('camera:live');
+                  },
+                }),
+                focusText,
                 h(
-                  'button',
-                  { class: picking ? 'active' : '', onclick: actions.pickFocus },
-                  picking ? 'Punkt anklicken …' : 'Fokus wählen',
-                ),
-                camera.focusPoint
-                  ? h(
-                      'button',
-                      {
-                        onclick: () => {
-                          camera.focusPoint = null;
-                          emit('camera');
+                  'div',
+                  { class: 'button-row' },
+                  h(
+                    'button',
+                    { class: picking ? 'active' : '', onclick: actions.pickFocus },
+                    picking ? 'Click a point …' : 'Pick focus',
+                  ),
+                  camera.focusPoint
+                    ? h(
+                        'button',
+                        {
+                          onclick: () => {
+                            camera.focusPoint = null;
+                            emit('camera');
+                          },
                         },
-                      },
-                      'Zurücksetzen',
-                    )
-                  : null,
-              ),
-            ]
-          : null,
-      ], { open: camera.dof }),
+                        'Reset',
+                      )
+                    : null,
+                ),
+              ]
+            : null,
+        ],
+        { open: camera.dof },
+      ),
       explodeControls(),
-      h('button', { class: 'primary', onclick: actions.addView }, 'Ansicht speichern'),
+      h('button', { class: 'primary', onclick: actions.addView }, 'Save view'),
     ],
     live: () => {
       const current = viewer.getPose();
@@ -1120,18 +1215,22 @@ function viewsPanel({ viewer, actions }) {
   };
 }
 
-/** Exploded view: how far apart the parts move, and in which direction. */
+/** Exploded view: how far apart the parts move, in which direction and from where. */
 function explodeControls() {
   if (state.parts.length < 2) return null;
   const { explode } = state;
-  return group('explode', 'Explosionsansicht', [
-      slider('Abstand', {
+  const own = Object.keys(explode.parts || {}).length;
+  return group(
+    'explode',
+    'Exploded view',
+    [
+      slider('Distance', {
         min: 0,
         max: 150,
         step: 1,
         value: Math.round(explode.amount * 100),
-        format: (value) => (value === 0 ? 'zusammengebaut' : `${value} %`),
-        title: 'Wie weit die Bauteile auseinanderrücken: 100 % verdoppelt ihren Abstand zur Mitte der Baugruppe',
+        format: (value) => (value === 0 ? 'assembled' : percent(value)),
+        title: 'How far the parts move apart: 100 % doubles their distance from the centre',
         oninput: (value) => {
           explode.amount = value / 100;
           emit('explode:live');
@@ -1139,227 +1238,373 @@ function explodeControls() {
         onchange: () => emit('explode'),
       }),
       field(
-        'Richtung',
+        'Direction',
+        selectControl(Object.entries(EXPLODE_DIRECTIONS), explode.direction, (value) => {
+          explode.direction = value;
+          emit('explode');
+        }),
+      ),
+      field(
+        'Centre',
         selectControl(
-          Object.entries(EXPLODE_DIRECTIONS),
-          explode.direction,
+          [['', 'Middle of the assembly'], ...state.parts.map((part) => [String(part.id), part.label])],
+          explode.anchor === null ? '' : String(explode.anchor),
           (value) => {
-            explode.direction = value;
+            explode.anchor = value === '' ? null : Number(value);
             emit('explode');
           },
         ),
       ),
-  ], { open: explode.amount > 0, title: 'Zieht die Bauteile einer Baugruppe auseinander, um ihren Aufbau zu zeigen' });
+      h(
+        'p',
+        { class: 'hint' },
+        own > 0
+          ? `${plural(own, 'part has', 'parts have')} own settings.`
+          : 'Open a part to keep it in place or send it in a direction of its own.',
+      ),
+      own > 0
+        ? h(
+            'button',
+            {
+              onclick: () => {
+                explode.parts = {};
+                emit('explode');
+              },
+            },
+            'Reset part settings',
+          )
+        : null,
+    ],
+    { open: explode.amount > 0, title: 'Pulls the parts of an assembly apart to show how it is built' },
+  );
 }
 
 function viewPanel(view, { viewer, actions }) {
   return {
-    title: 'Gespeicherte Ansicht',
+    title: view.name,
     body: [
-      field(
-        'Name',
-        h('input', {
-          type: 'text',
-          value: view.name,
-          oninput: (event) => {
-            view.name = event.target.value || 'Ansicht';
-            emit('views:live');
-          },
-        }),
-      ),
-      h('button', { onclick: () => actions.showView(view) }, 'Anzeigen'),
+      textField('Name', view.name, (value) => {
+        view.name = value || 'View';
+        emit('views:live');
+      }),
+      h('button', { onclick: () => actions.showView(view) }, 'Show'),
       h(
         'button',
         {
           onclick: () => {
-            Object.assign(view, viewer.getViewState(), { explode: { ...state.explode } });
+            Object.assign(view, viewer.getViewState(), { explode: structuredClone(state.explode) });
             emit('views');
           },
         },
-        'Mit aktueller Ansicht überschreiben',
+        'Overwrite with the current view',
       ),
-      h(
-        'button',
-        {
-          class: 'danger',
-          onclick: () => {
-            state.views = state.views.filter((other) => other !== view);
-            select('views');
-          },
-        },
-        'Ansicht löschen',
-      ),
+      deleteButton('Delete view', () => {
+        state.views = state.views.filter((other) => other !== view);
+        select('views');
+      }),
     ],
   };
 }
 
-function outputPanel({ actions }) {
-  const { output } = state;
-  const size = actions.resolveOutputSize();
+// --- Output and render jobs --------------------------------------------------------
+
+/** Image size, quality and file settings, shared by render jobs and their defaults. */
+function imageSettings(settings, { actions, onchange }) {
+  const size = actions.resolveOutputSize(settings);
+  const set = (key) => (value) => {
+    settings[key] = value;
+    onchange();
+  };
   const sizeInput = (key) =>
     h('input', {
       type: 'number',
       min: 64,
       max: 8192,
       step: 1,
-      value: output[key],
-      onchange: (event) => {
-        output[key] = Math.min(Math.max(Math.round(Number(event.target.value) || 64), 64), 8192);
-        emit('output');
-      },
+      value: settings[key],
+      onchange: (event) => set(key)(Math.min(Math.max(Math.round(Number(event.target.value) || 64), 64), 8192)),
     });
+  return [
+    group('job-image', 'Image', [
+      field(
+        'Aspect ratio',
+        selectControl(
+          Object.entries(OUTPUT_ASPECTS).map(([key, value]) => [key, value.label]),
+          settings.aspect,
+          set('aspect'),
+        ),
+      ),
+      settings.aspect === 'custom'
+        ? h('div', { class: 'field-grid two' }, field('Width px', sizeInput('width')), field('Height px', sizeInput('height')))
+        : field(
+            'Resolution',
+            selectControl(
+              Object.entries(OUTPUT_RESOLUTIONS).map(([key, label]) => [key, label]),
+              String(settings.resolution),
+              (value) => set('resolution')(Number(value)),
+            ),
+            `${size.width} × ${size.height}`,
+          ),
+    ]),
+    group('job-quality', 'Quality', [
+      field(
+        'Samples',
+        selectControl(
+          Object.entries(QUALITY).map(([key, value]) => [key, `${value.label} (${value.samples})`]),
+          settings.quality,
+          set('quality'),
+        ),
+      ),
+      toggle('Denoise', settings.denoise, set('denoise'), 'Smooths the remaining noise at the end of the rendering'),
+    ]),
+    group('job-file', 'File', [
+      field(
+        'File format',
+        selectControl(
+          Object.entries(FILE_FORMATS).map(([key, value]) => [key, value.label]),
+          settings.format,
+          set('format'),
+        ),
+      ),
+      toggle('Transparent background', settings.transparent, set('transparent'), 'Without background and floor; PNG only'),
+      settings.transparent && settings.format === 'jpg'
+        ? h('p', { class: 'hint' }, 'JPG has no transparency: images are put on white when saved.')
+        : null,
+    ]),
+  ];
+}
+
+function deviceGroup() {
+  const { output } = state;
   const set = (key) => (value) => {
     output[key] = value;
     emit('output');
   };
+  return group(
+    'output-device',
+    'Rendering device',
+    [
+      field(
+        'Render on',
+        selectControl(
+          Object.entries(RENDER_DEVICES).map(([key, value]) => [key, value.label]),
+          output.device,
+          set('device'),
+        ),
+      ),
+      output.device === 'gpu'
+        ? toggle('Gentle mode', output.gentle, set('gentle'), 'For laptops and weaker graphics cards: smaller portions, but slower')
+        : h('p', { class: 'hint' }, 'Without a graphics card an image takes many times as long. Meant as a fallback.'),
+    ],
+    { open: false },
+  );
+}
 
+function jobSummary(job, actions) {
+  const { width, height } = actions.resolveOutputSize(job);
+  return job.type === 'animation' ? `${job.turntableFrames} images · ${width} × ${height}` : `${width} × ${height}`;
+}
+
+function outputPanel({ actions }) {
+  const jobs = state.jobs;
+  const views = state.views.length;
   return {
     title: 'Output',
     body: [
-      group('output-image', 'Bild', [
-        field(
-          'Seitenverhältnis',
-          selectControl(
-            Object.entries(OUTPUT_ASPECTS).map(([key, value]) => [key, value.label]),
-            output.aspect,
-            set('aspect'),
-          ),
-        ),
-        output.aspect === 'custom'
-          ? h('div', { class: 'field-grid two' }, field('Breite px', sizeInput('width')), field('Höhe px', sizeInput('height')))
-          : field(
-              'Auflösung',
-              selectControl(
-                Object.entries(OUTPUT_RESOLUTIONS).map(([key, label]) => [key, label]),
-                String(output.resolution),
-                (value) => set('resolution')(Number(value)),
-              ),
-              `${size.width} × ${size.height}`,
-            ),
-        h(
-          'button',
-          { onclick: () => actions.fit(), title: 'Der gestrichelte Rahmen in der Ansicht zeigt den Bildausschnitt' },
-          'Modell in den Ausschnitt einpassen',
-        ),
-      ]),
-      group('output-quality', 'Qualität', [
-        field(
-          'Samples',
-          selectControl(
-            Object.entries(QUALITY).map(([key, value]) => [key, `${value.label} (${value.samples})`]),
-            output.quality,
-            set('quality'),
-          ),
-        ),
-        toggle('Entrauschen', output.denoise, set('denoise'), 'Glättet das Restrauschen am Ende des Renderings'),
-      ]),
-      group('output-file', 'Datei', [
-        field(
-          'Dateiformat',
-          selectControl(
-            Object.entries(FILE_FORMATS).map(([key, value]) => [key, value.label]),
-            output.format,
-            set('format'),
-          ),
-        ),
-        toggle('Transparenter Hintergrund', output.transparent, set('transparent'), 'Ohne Hintergrund und Boden, nur mit PNG'),
-        output.transparent && output.format === 'jpg'
-          ? h('p', { class: 'hint' }, 'JPG kennt keine Transparenz: Bilder werden beim Speichern auf Weiß gesetzt.')
-          : null,
-      ]),
-      group(
-        'output-device',
-        'Rechner',
-        [
-          field(
-            'Rendern auf',
-            selectControl(
-              Object.entries(RENDER_DEVICES).map(([key, value]) => [key, value.label]),
-              output.device,
-              set('device'),
-            ),
-          ),
-          output.device === 'gpu'
-            ? toggle(
-                'Schonender Modus',
-                output.gentle,
-                set('gentle'),
-                'Für Laptops und schwächere Grafikkarten: kleinere Portionen, dafür langsamer',
-              )
-            : h('p', { class: 'hint' }, 'Ohne Grafikkarte dauert ein Bild ein Vielfaches. Als Notlösung gedacht.'),
-        ],
-        { open: false },
+      h(
+        'p',
+        { class: 'hint' },
+        'A render job keeps its camera, explosion and image settings. Set up as many as you like, then render them all.',
       ),
+      h(
+        'div',
+        { class: 'button-row' },
+        h('button', { onclick: () => actions.addJob('image') }, icon('image', 15), 'Image'),
+        h('button', { onclick: actions.addAnimationJob }, icon('film', 15), 'Animation'),
+      ),
+      views > 0
+        ? h(
+            'button',
+            { onclick: actions.jobsFromViews, title: 'One image job for each saved view that has none yet' },
+            `Jobs from saved views (${views})`,
+          )
+        : null,
+      jobs.length > 0
+        ? h(
+            'ul',
+            { class: 'item-list' },
+            jobs.map((job) =>
+              h(
+                'li',
+                { tabIndex: 0, onclick: () => select(`job:${job.id}`), onkeydown: (event) => event.key === 'Enter' && select(`job:${job.id}`) },
+                icon(job.type === 'animation' ? 'film' : 'image', 15),
+                h('span', { class: 'item-name' }, job.name),
+                h('span', { class: 'item-detail' }, jobSummary(job, actions)),
+              ),
+            ),
+          )
+        : null,
       actions.renderSupported
-        ? h('button', { class: 'primary', onclick: actions.startRender }, 'Rendering starten')
-        : h('p', { class: 'hint error' }, 'Dieser Browser unterstützt kein WebGPU. Bitte Chrome oder Edge verwenden.'),
+        ? h(
+            'button',
+            { class: 'primary', onclick: actions.renderAllJobs, disabled: jobs.length === 0 },
+            jobs.length > 1 ? `Render all ${jobs.length} jobs` : 'Render job',
+          )
+        : h('p', { class: 'hint error' }, NO_WEBGPU),
+      deviceGroup(),
     ],
   };
 }
 
-function rendersPanel({ actions }) {
-  if (!actions.renderSupported) {
-    return {
-      title: 'Renderings',
-      body: [h('p', { class: 'hint error' }, 'Dieser Browser unterstützt kein WebGPU. Bitte Chrome oder Edge verwenden.')],
-    };
-  }
-  const { output } = state;
-  const views = state.views.length;
-  const done = state.renders.filter((render) => render.status === 'done').length;
-  const queued = state.renders.filter((render) => render.status === 'queued').length;
-  const format = FILE_FORMATS[output.format].extension.toUpperCase();
+function jobPanel(job, { actions }) {
+  const changed = () => actions.jobChanged(job);
+  const set = (key) => (value) => {
+    job[key] = value;
+    changed();
+  };
   return {
-    title: 'Renderings',
+    title: job.name,
     body: [
-      h('button', { class: 'primary', onclick: actions.startRender }, 'Rendering starten'),
+      textField('Name', job.name, (value) => {
+        job.name = value || 'Render job';
+        emit('jobs:live');
+      }),
+      segmented(
+        'Render',
+        [
+          ['image', 'Image', 'image'],
+          ['animation', 'Turntable', 'film'],
+        ],
+        job.type,
+        set('type'),
+      ),
+      h(
+        'p',
+        { class: 'hint' },
+        'While this job is open it takes the camera along: move the view until the frame shows what you want.',
+      ),
       h(
         'button',
-        {
-          onclick: actions.renderAllViews,
-          disabled: views === 0,
-          title: views === 0 ? 'Unter „Perspektive“ lassen sich Ansichten speichern' : 'Rendert jede gespeicherte Ansicht nacheinander',
-        },
-        views === 0 ? 'Alle Ansichten rendern' : `Alle ${views} Ansichten rendern`,
+        { onclick: () => actions.fit(), title: 'The dashed frame in the viewport shows the image' },
+        'Fit the model into the frame',
       ),
-      queued > 0 ? h('button', { class: 'danger', onclick: actions.cancelQueue }, `Warteschlange leeren (${queued})`) : null,
-      group('turntable', 'Drehteller', [
-        field(
-          'Bilder pro Umdrehung',
-          selectControl(
-            TURNTABLE_FRAMES.map((frames) => [frames, `${frames} (alle ${numberFormat.format(360 / frames)}°)`]),
-            output.turntableFrames,
-            (value) => {
-              output.turntableFrames = Number(value);
-              emit('output');
-            },
-          ),
-        ),
-        h(
-          'button',
-          {
-            onclick: actions.renderTurntable,
-            title: 'Das Modell dreht sich einmal um die senkrechte Achse; Kamera und Licht bleiben stehen',
-          },
-          'Drehteller rendern',
-        ),
-        h(
-          'p',
-          { class: 'hint' },
-          `Speichern als Video (eine Umdrehung in ${TURN_SECONDS} s) oder als Einzelbilder. Mehr Bilder laufen flüssiger.`,
-        ),
-      ]),
-      done > 0
-        ? group('renders-save', 'Speichern', [
-            h(
-              'button',
-              { onclick: actions.saveAllRenders, title: 'Alle fertigen Bilder in einer ZIP-Datei, im Format aus „Output“' },
-              `Alle ${done} fertigen als ${format} (ZIP)`,
+      job.type === 'animation'
+        ? group('job-animation', 'Turntable', [
+            field(
+              'Images per turn',
+              selectControl(
+                TURNTABLE_FRAMES.map((frames) => [frames, `${frames} (every ${numberFormat.format(360 / frames)}°)`]),
+                job.turntableFrames,
+                (value) => set('turntableFrames')(Number(value)),
+              ),
             ),
+            field(
+              'Length of one turn',
+              selectControl(
+                TURNTABLE_SECONDS.map((seconds) => [seconds, `${seconds} s`]),
+                job.turntableSeconds,
+                (value) => set('turntableSeconds')(Number(value)),
+              ),
+            ),
+            h(
+              'p',
+              { class: 'hint' },
+              'The model turns once around the vertical axis, like on a turntable; camera and light stay. ' +
+                'The camera height sets the viewing angle. More images play more smoothly.',
+            ),
+          ])
+        : null,
+      imageSettings(job, { actions, onchange: changed }),
+      explodeControls(),
+      actions.renderSupported
+        ? h('button', { class: 'primary', onclick: () => actions.renderJob(job) }, job.type === 'animation' ? 'Render this turntable' : 'Render this image')
+        : h('p', { class: 'hint error' }, NO_WEBGPU),
+      h(
+        'div',
+        { class: 'button-row' },
+        h('button', { onclick: () => actions.duplicateJob(job) }, icon('copy', 15), 'Duplicate'),
+        h('button', { class: 'danger', onclick: () => actions.deleteJob(job) }, icon('trash', 15), 'Delete'),
+      ),
+    ],
+  };
+}
+
+// --- Renders --------------------------------------------------------------------
+
+function rendersPanel({ actions }) {
+  if (!actions.renderSupported) {
+    return { title: 'Renders', editable: false, body: [h('p', { class: 'hint error' }, NO_WEBGPU)] };
+  }
+  const done = state.renders.filter((render) => render.status === 'done').length;
+  const queued = state.renders.filter((render) => render.status === 'queued').length;
+  const running = state.renders.some((render) => render.status === 'running');
+  return {
+    title: 'Renders',
+    editable: false,
+    body: [
+      state.renders.length === 0
+        ? h('p', { class: 'hint' }, 'Set up render jobs under Output and render them. Finished images stay with the project.')
+        : h(
+            'p',
+            { class: 'hint' },
+            [
+              running ? 'One rendering is running' : null,
+              queued > 0 ? `${queued} waiting` : null,
+              done > 0 ? `${done} done` : null,
+            ]
+              .filter(Boolean)
+              .join(' · '),
+          ),
+      h('button', { onclick: () => select('output') }, 'Go to the render jobs'),
+      queued > 0 ? h('button', { class: 'danger', onclick: actions.cancelQueue }, `Clear the queue (${queued})`) : null,
+      done > 0
+        ? group('renders-save', 'Save all', [
+            h(
+              'div',
+              { class: 'button-row' },
+              Object.entries(FILE_FORMATS).map(([key, value]) =>
+                h('button', { onclick: () => actions.saveAllRenders(key) }, `${value.extension.toUpperCase()} (ZIP)`),
+              ),
+            ),
+            h('p', { class: 'hint' }, 'All finished renderings with their adjustments, turntables in folders of their own.'),
           ])
         : null,
     ],
   };
+}
+
+/** Sliders for the image adjustments of a finished rendering. */
+function adjustControls(render) {
+  render.adjust ??= defaultAdjust();
+  const sliders = Object.entries(ADJUSTMENTS).map(([key, spec]) =>
+    slider(spec.label, {
+      min: spec.min,
+      max: spec.max,
+      value: render.adjust[key] || 0,
+      format: (value) => (value > 0 && spec.min < 0 ? `+${value}` : String(value)),
+      oninput: (value) => {
+        render.adjust[key] = value;
+        emit('renders:live');
+      },
+      onchange: () => emit('renders'),
+    }),
+  );
+  return group('render-adjust', 'Adjust', [
+    sliders,
+    h(
+      'button',
+      {
+        disabled: isNeutral(render.adjust),
+        onclick: () => {
+          render.adjust = defaultAdjust();
+          emit('renders');
+        },
+      },
+      icon('undo', 15),
+      'Reset adjustments',
+    ),
+    h('p', { class: 'hint' }, 'Applied when saving, also to the images and the video of a turntable.'),
+  ]);
 }
 
 function renderPanelFor(render, { actions }) {
@@ -1376,53 +1621,54 @@ function renderPanelFor(render, { actions }) {
     const spent = render.frames.reduce((sum, frame) => sum + frame.seconds, 0);
     const current = render.seconds - spent;
     const left = Math.max((spent / finished) * (count - finished) - current, 0);
-    return ` · noch etwa ${formatDuration(left)}`;
+    return ` · about ${formatDuration(left)} left`;
   };
 
   const update = () => {
     bar.firstChild.style.width = `${Math.round(render.progress * 100)}%`;
     bar.hidden = render.status !== 'running';
     device.hidden = !render.deviceName;
-    device.textContent = render.deviceName ? `Gerendert auf: ${render.deviceName}` : '';
-    const image = count ? `Bild ${render.frameIndex + 1} von ${count} · ` : '';
+    device.textContent = render.deviceName ? `Rendered on: ${render.deviceName}` : '';
+    const image = count ? `Image ${render.frameIndex + 1} of ${count} · ` : '';
     if (render.status === 'running') {
       text.textContent =
         render.stage === 'rendering'
-          ? `${image}Sample ${Math.floor(render.samples)} von ${render.targetSamples} · ${formatDuration(render.seconds)}${remaining()}`
+          ? `${image}Sample ${Math.floor(render.samples)} of ${render.targetSamples} · ${formatDuration(render.seconds)}${remaining()}`
           : render.stage === 'denoising'
-            ? `${image}Entrauschen … · ${formatDuration(render.seconds)}${remaining()}`
-            : `${image}Szene wird vorbereitet …`;
+            ? `${image}Denoising … · ${formatDuration(render.seconds)}${remaining()}`
+            : `${image}Preparing the scene …`;
     } else if (render.status === 'queued') {
-      text.textContent = 'Wartet, bis die Renderings davor fertig sind.';
+      text.textContent = 'Waiting until the renderings before it are done.';
     } else if (render.status === 'done') {
+      const images = render.frames.length || render.frameCount || count;
       text.textContent =
-        `Fertig nach ${formatDuration(render.seconds)} · ` +
-        (count ? `${render.frames.length} Bilder` : `${Math.round(render.samples)} Samples`) +
-        (render.denoised ? ' · entrauscht' : '') +
+        `Done in ${formatDuration(render.seconds)} · ` +
+        (count ? `${images} images` : `${Math.round(render.samples)} samples`) +
+        (render.denoised ? ' · denoised' : '') +
         (render.note ? ` · ${render.note}` : '');
     } else if (render.status === 'failed') {
-      text.textContent = `Fehlgeschlagen: ${render.error}`;
+      text.textContent = `Failed: ${render.error}`;
     } else {
-      text.textContent = 'Abgebrochen';
+      text.textContent = 'Cancelled';
     }
   };
 
   // Browsing and playing a finished turntable series.
   let player = null;
-  if (count && render.status === 'done') {
+  if (count && render.status === 'done' && render.frames.length > 0) {
     const frames = render.frames.length;
     const play = h('button', { onclick: () => actions.togglePlaying(render) });
-    const scrub = slider('Bild', {
+    const scrub = slider('Image', {
       min: 1,
       max: frames,
       value: render.shownFrame + 1,
-      format: (value) => `${value} von ${frames}`,
+      format: (value) => `${value} of ${frames}`,
       oninput: (value) => actions.showFrame(render, value - 1),
     });
     player = h('div', null, scrub, h('div', { class: 'button-column' }, play));
     player.update = () => {
       scrub.set(render.shownFrame + 1);
-      play.textContent = actions.isPlaying(render) ? 'Anhalten' : 'Abspielen';
+      play.textContent = actions.isPlaying(render) ? 'Pause' : 'Play';
     };
     player.update();
   }
@@ -1432,64 +1678,72 @@ function renderPanelFor(render, { actions }) {
       buttons.append(
         h(
           'button',
-          { onclick: () => render.handle?.finishNow(), title: 'Beendet das Rendering mit dem bisher erreichten Stand' },
-          'Jetzt fertigstellen',
+          { onclick: () => render.handle?.finishNow(), title: 'Ends the rendering with what it has reached so far' },
+          'Finish now',
         ),
       );
     }
     buttons.append(
       h(
         'button',
-        { class: 'danger', onclick: () => actions.cancelRender(render), title: count ? 'Fertige Bilder bleiben erhalten' : null },
-        'Abbrechen',
+        { class: 'danger', onclick: () => actions.cancelRender(render), title: count ? 'Finished images are kept' : null },
+        'Cancel',
       ),
     );
   } else if (render.status === 'queued') {
-    buttons.append(h('button', { class: 'danger', onclick: () => actions.deleteRender(render) }, 'Aus der Warteschlange nehmen'));
+    buttons.append(h('button', { class: 'danger', onclick: () => actions.deleteRender(render) }, 'Take out of the queue'));
   } else {
     if (render.status === 'done') {
-      const chosen = state.output.format;
+      const chosen = render.format || 'png';
       if (count) {
         if (videoSupported()) {
-          buttons.append(h('button', { class: 'primary', onclick: () => actions.saveVideo(render) }, 'Video speichern'));
+          buttons.append(
+            h(
+              'button',
+              { class: 'primary', onclick: () => actions.saveVideo(render), title: 'Recorded in real time; keep this tab in front' },
+              'Save video',
+            ),
+          );
         }
         buttons.append(
           h(
             'button',
             { onclick: () => actions.saveRender(render, chosen) },
-            `Einzelbilder speichern (${FILE_FORMATS[chosen].extension.toUpperCase()}, ZIP)`,
+            `Save images (${FILE_FORMATS[chosen].extension.toUpperCase()}, ZIP)`,
           ),
         );
       } else {
-        // The format chosen under "Output" comes first.
+        // The format chosen in the job comes first.
         for (const format of [chosen, ...Object.keys(FILE_FORMATS).filter((key) => key !== chosen)]) {
           buttons.append(
             h(
               'button',
               { class: format === chosen ? 'primary' : null, onclick: () => actions.saveRender(render, format) },
-              `${FILE_FORMATS[format].extension.toUpperCase()} speichern`,
+              `Save ${FILE_FORMATS[format].extension.toUpperCase()}`,
             ),
           );
         }
       }
     }
-    buttons.append(h('button', { class: 'danger', onclick: () => actions.deleteRender(render) }, 'Rendering löschen'));
+    buttons.append(h('button', { class: 'danger', onclick: () => actions.deleteRender(render) }, 'Delete rendering'));
   }
   update();
 
   return {
     title: render.name,
+    editable: false,
     body: [
       h(
         'p',
         { class: 'hint' },
-        `${render.width} × ${render.height} Pixel${render.transparent ? ' · transparent' : ''}` +
-          (count ? ` · ${count} Bilder für eine Umdrehung` : ''),
+        `${render.width} × ${render.height} pixels${render.transparent ? ' · transparent' : ''}` +
+          (count ? ` · ${count} images per turn` : ''),
       ),
       bar,
       text,
       device,
       player,
+      render.status === 'done' ? adjustControls(render) : null,
       buttons,
     ],
     live: () => {
@@ -1502,7 +1756,8 @@ function renderPanelFor(render, { actions }) {
 /**
  * Builds the settings panel for the selected tree node. Returns a function
  * that refreshes volatile values (render progress, camera numbers) without
- * rebuilding, or null.
+ * rebuilding, or null. Panels that change the project get ✓ (keep) and ✗
+ * (discard) in their header.
  */
 export function renderPanel(container, context) {
   const key = state.selected;
@@ -1510,9 +1765,9 @@ export function renderPanel(container, context) {
   const id = Number(idText);
   let panel = null;
 
-  if (key === 'project') panel = projectPanel(context);
-  else if (key === 'geometry') panel = geometryPanel(context);
+  if (key === 'geometry') panel = geometryPanel(context);
   else if (state.parts.length === 0) panel = null;
+  else if (key === 'parts') panel = partsPanel(context);
   else if (kind === 'part') panel = state.parts[id] ? partPanel(state.parts[id], context) : null;
   else if (key === 'sections') panel = sectionsPanel(context);
   else if (kind === 'section') {
@@ -1528,13 +1783,15 @@ export function renderPanel(container, context) {
   else if (kind === 'light') {
     const light = state.lighting.lights.find((item) => item.id === id);
     panel = light ? lightPanel(light, context) : null;
-  }
-  else if (key === 'views') panel = viewsPanel(context);
+  } else if (key === 'views') panel = viewsPanel(context);
   else if (kind === 'view') {
     const view = state.views.find((item) => item.id === id);
     panel = view ? viewPanel(view, context) : null;
   } else if (key === 'output') panel = outputPanel(context);
-  else if (key === 'renders') panel = rendersPanel(context);
+  else if (kind === 'job') {
+    const job = state.jobs.find((item) => item.id === id);
+    panel = job ? jobPanel(job, context) : null;
+  } else if (key === 'renders') panel = rendersPanel(context);
   else if (kind === 'render') {
     const render = state.renders.find((item) => item.id === id);
     panel = render ? renderPanelFor(render, context) : null;
@@ -1546,6 +1803,10 @@ export function renderPanel(container, context) {
     return null;
   }
 
+  const { actions } = context;
+  const editable = context.editable && panel.editable !== false;
+  const headerButton = (name, title, run, className = 'icon-button') =>
+    h('button', { class: className, title, 'aria-label': title, onclick: run }, icon(name, 16));
   const scroll = container.querySelector('.panel-body')?.scrollTop ?? 0;
   const body = h('div', { class: 'panel-body' }, panel.body);
   container.replaceChildren(
@@ -1553,11 +1814,12 @@ export function renderPanel(container, context) {
       'header',
       { class: 'panel-header' },
       h('h2', { title: panel.title }, panel.title),
-      h(
-        'button',
-        { class: 'icon-button', title: 'Schließen', 'aria-label': 'Schließen', onclick: context.actions.closePanel },
-        icon('close', 16),
-      ),
+      editable
+        ? [
+            headerButton('check', 'Keep changes and close', actions.applyPanel, 'icon-button apply'),
+            headerButton('close', 'Discard changes made in this panel', actions.discardPanel, 'icon-button discard'),
+          ]
+        : headerButton('close', 'Close', actions.closePanel),
     ),
     body,
   );

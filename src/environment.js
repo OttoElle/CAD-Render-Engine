@@ -17,82 +17,82 @@ import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 export const LIGHT_PRESETS = [
   {
     id: 'studio-soft',
-    label: 'Studio weich',
+    label: 'Studio soft',
     sky: { top: [0.9, 0.9, 0.9], horizon: [0.55, 0.55, 0.55], bottom: [0.25, 0.25, 0.25] },
     lights: [
-      { name: 'Hauptlicht', az: 10, el: 62, width: 70, height: 45, intensity: 5.5, color: [1, 0.99, 0.97] },
-      { name: 'Fülllicht', az: -95, el: 25, width: 45, height: 50, intensity: 2.2, color: [0.95, 0.97, 1] },
-      { name: 'Kantenlicht', az: 150, el: 30, width: 40, height: 30, intensity: 2.0, color: [1, 1, 1] },
+      { name: 'Key light', az: 10, el: 62, width: 70, height: 45, intensity: 5.5, color: [1, 0.99, 0.97] },
+      { name: 'Fill light', az: -95, el: 25, width: 45, height: 50, intensity: 2.2, color: [0.95, 0.97, 1] },
+      { name: 'Rim light', az: 150, el: 30, width: 40, height: 30, intensity: 2.0, color: [1, 1, 1] },
     ],
     shadow: { opacity: 0.28, radius: 9 },
   },
   {
     id: 'studio-high-key',
-    label: 'Studio hell',
+    label: 'Studio bright',
     sky: { top: [1.5, 1.5, 1.5], horizon: [1.15, 1.15, 1.15], bottom: [0.55, 0.55, 0.55] },
     lights: [
-      { name: 'Oberlicht', az: 0, el: 75, width: 80, height: 60, intensity: 4, color: [1, 1, 1] },
-      { name: 'Streifen links', az: -70, el: 20, width: 14, height: 60, intensity: 6, color: [1, 1, 1] },
-      { name: 'Streifen rechts', az: 70, el: 20, width: 14, height: 60, intensity: 6, color: [1, 1, 1] },
+      { name: 'Top light', az: 0, el: 75, width: 80, height: 60, intensity: 4, color: [1, 1, 1] },
+      { name: 'Strip left', az: -70, el: 20, width: 14, height: 60, intensity: 6, color: [1, 1, 1] },
+      { name: 'Strip right', az: 70, el: 20, width: 14, height: 60, intensity: 6, color: [1, 1, 1] },
     ],
     shadow: { opacity: 0.18, radius: 12 },
   },
   {
     id: 'studio-contrast',
-    label: 'Studio kontrastreich',
+    label: 'Studio high contrast',
     sky: { top: [0.06, 0.06, 0.065], horizon: [0.04, 0.04, 0.045], bottom: [0.02, 0.02, 0.02] },
     lights: [
-      { name: 'Hauptlicht', az: -35, el: 48, width: 26, height: 34, intensity: 22, color: [1, 0.98, 0.95] },
-      { name: 'Kantenlicht', az: 140, el: 30, width: 10, height: 50, intensity: 12, color: [0.9, 0.95, 1] },
-      { name: 'Aufheller', az: 75, el: 8, width: 30, height: 14, intensity: 1.5, color: [1, 1, 1] },
+      { name: 'Key light', az: -35, el: 48, width: 26, height: 34, intensity: 22, color: [1, 0.98, 0.95] },
+      { name: 'Rim light', az: 140, el: 30, width: 10, height: 50, intensity: 12, color: [0.9, 0.95, 1] },
+      { name: 'Bounce', az: 75, el: 8, width: 30, height: 14, intensity: 1.5, color: [1, 1, 1] },
     ],
     shadow: { opacity: 0.5, radius: 4 },
   },
   {
     id: 'studio-rim',
-    label: 'Studio Kantenlicht',
+    label: 'Studio rim light',
     sky: { top: [0.03, 0.03, 0.035], horizon: [0.02, 0.02, 0.025], bottom: [0.01, 0.01, 0.01] },
     lights: [
-      { name: 'Streifen links', az: -135, el: 22, width: 8, height: 70, intensity: 26, color: [0.92, 0.96, 1] },
-      { name: 'Streifen rechts', az: 135, el: 22, width: 8, height: 70, intensity: 26, color: [0.92, 0.96, 1] },
-      { name: 'Oberlicht', az: 0, el: 70, width: 40, height: 30, intensity: 4, color: [1, 0.98, 0.95] },
-      { name: 'Aufheller', az: 20, el: 10, width: 50, height: 20, intensity: 0.8, color: [1, 1, 1] },
+      { name: 'Strip left', az: -135, el: 22, width: 8, height: 70, intensity: 26, color: [0.92, 0.96, 1] },
+      { name: 'Strip right', az: 135, el: 22, width: 8, height: 70, intensity: 26, color: [0.92, 0.96, 1] },
+      { name: 'Top light', az: 0, el: 70, width: 40, height: 30, intensity: 4, color: [1, 0.98, 0.95] },
+      { name: 'Bounce', az: 20, el: 10, width: 50, height: 20, intensity: 0.8, color: [1, 1, 1] },
     ],
     shadow: { opacity: 0.4, radius: 8 },
   },
   {
     id: 'studio-top',
-    label: 'Studio Oberlicht',
+    label: 'Studio top light',
     sky: { top: [0.35, 0.35, 0.35], horizon: [0.3, 0.3, 0.3], bottom: [0.12, 0.12, 0.12] },
     lights: [
-      { name: 'Oberlicht', az: 0, el: 82, width: 90, height: 90, intensity: 5, color: [1, 0.99, 0.97] },
-      { name: 'Reflektor vorne', az: 0, el: 12, width: 60, height: 18, intensity: 1.2, color: [1, 1, 1] },
+      { name: 'Top light', az: 0, el: 82, width: 90, height: 90, intensity: 5, color: [1, 0.99, 0.97] },
+      { name: 'Front reflector', az: 0, el: 12, width: 60, height: 18, intensity: 1.2, color: [1, 1, 1] },
     ],
     shadow: { opacity: 0.45, radius: 14 },
   },
   {
     id: 'daylight',
-    label: 'Tageslicht',
+    label: 'Daylight',
     sky: { top: [0.35, 0.55, 1.0], horizon: [1.0, 1.05, 1.15], bottom: [0.35, 0.33, 0.3] },
-    lights: [{ name: 'Sonne', az: 40, el: 50, width: 3.5, height: 3.5, intensity: 420, color: [1, 0.96, 0.88], round: true }],
+    lights: [{ name: 'Sun', az: 40, el: 50, width: 3.5, height: 3.5, intensity: 420, color: [1, 0.96, 0.88], round: true }],
     shadow: { opacity: 0.45, radius: 2.5 },
   },
   {
     id: 'overcast',
-    label: 'Bewölkt',
+    label: 'Overcast',
     sky: { top: [1.35, 1.38, 1.45], horizon: [1.05, 1.07, 1.12], bottom: [0.3, 0.29, 0.27] },
     lights: [],
     shadow: { opacity: 0.3, radius: 16 },
   },
   {
     id: 'hall',
-    label: 'Werkhalle',
+    label: 'Workshop',
     sky: { top: [0.18, 0.17, 0.16], horizon: [0.28, 0.27, 0.25], bottom: [0.12, 0.11, 0.1] },
     lights: [
-      { name: 'Deckenlicht 1', az: -40, el: 55, width: 5, height: 28, intensity: 30, color: [1, 0.95, 0.86] },
-      { name: 'Deckenlicht 2', az: 20, el: 62, width: 5, height: 28, intensity: 30, color: [1, 0.95, 0.86] },
-      { name: 'Deckenlicht 3', az: 80, el: 55, width: 5, height: 28, intensity: 30, color: [1, 0.95, 0.86] },
-      { name: 'Fensterband', az: 180, el: 18, width: 120, height: 10, intensity: 3, color: [0.85, 0.92, 1] },
+      { name: 'Ceiling light 1', az: -40, el: 55, width: 5, height: 28, intensity: 30, color: [1, 0.95, 0.86] },
+      { name: 'Ceiling light 2', az: 20, el: 62, width: 5, height: 28, intensity: 30, color: [1, 0.95, 0.86] },
+      { name: 'Ceiling light 3', az: 80, el: 55, width: 5, height: 28, intensity: 30, color: [1, 0.95, 0.86] },
+      { name: 'Window band', az: 180, el: 18, width: 120, height: 10, intensity: 3, color: [0.85, 0.92, 1] },
     ],
     shadow: { opacity: 0.4, radius: 6 },
   },
@@ -391,7 +391,7 @@ export const CUSTOM_SHADOW = { opacity: 0.35, radius: 5 };
 export async function loadHdriFile(file) {
   const isExr = /\.exr$/i.test(file.name);
   if (!isExr && !/\.hdr$/i.test(file.name)) {
-    throw new Error('Bitte eine HDRI-Datei im Format .hdr oder .exr wählen.');
+    throw new Error('Please choose an HDRI file in .hdr or .exr format.');
   }
 
   const url = URL.createObjectURL(file);

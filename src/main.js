@@ -11,7 +11,13 @@ import {
   duplicateProject,
   deleteProject,
   getProject,
+  renameProject,
+  nextProjectName,
   importProject,
+  snapshotProject,
+  renderMeta,
+  sanitizeRenderMeta,
+  deleteRenderFiles,
   setCurrentProject,
   applySettings,
   applyModelData,
@@ -30,10 +36,10 @@ import {
 } from './persistence.js';
 import { sectionToPlane } from './section.js';
 import { sceneGradient } from './backdrop.js';
-import { explodeOffsets } from './explode.js';
+import { explodeOffsets, cloneExplode } from './explode.js';
+import { adjustCss, adjustImage } from './adjust.js';
 import {
   FILE_FORMATS,
-  TURN_SECONDS,
   convertImage,
   downloadBlob,
   recordVideo,
@@ -58,8 +64,10 @@ import {
   addMaterial,
   materialEntryOf,
   setPartsAssigned,
+  defaultAdjust,
   QUALITY,
   OUTPUT_ASPECTS,
+  JOB_SETTINGS,
 } from './state.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -82,6 +90,7 @@ const outputFrameEl = $('#output-frame');
 const focusMarkerEl = $('#focus-marker');
 const renderViewEl = $('#render-view');
 const edgesBtn = $('#edges-btn');
+const axesBtn = $('#axes-btn');
 const projectChip = $('#project-chip');
 const projectsBtn = $('#projects-btn');
 const overviewEl = $('#overview');
@@ -97,9 +106,16 @@ let pickingFocus = false;
 let pickingHighlight = null;
 /** Part highlighted by a click in the viewport, kept while the pointer leaves the tree. */
 let clickHighlight = [];
+/** The project as it was when the open panel was opened, for discarding its changes. */
+let panelSnapshot = null;
+/** Taken right before an action creates something and opens it, so discarding removes it again. */
+let pendingSnapshot = null;
+/** Part whose move gizmo is shown, or null. */
+let gizmoPart = null;
 
-$('#fit-btn').append(icon('fit', 16), 'Einpassen');
-edgesBtn.append(icon('edges', 16), 'Kanten');
+$('#fit-btn').append(icon('fit', 16), 'Fit');
+edgesBtn.append(icon('edges', 16), 'Edges');
+axesBtn.append(icon('axes', 16), 'Axes');
 
 function setStatus(text, { error = false, timeout = 0 } = {}) {
   clearTimeout(statusTimer);
@@ -142,16 +158,63 @@ function applySceneAndLighting() {
   });
 }
 
-/** Moves the parts apart for an exploded view, or back together. */
+/** Puts the parts where the user moved them, plus how far an exploded view moves them apart. */
 function applyExplode() {
-  viewer.setPartOffsets(explodeOffsets(state.parts, state.explode));
+  const exploded = explodeOffsets(state.parts, state.explode, state.partOffsets);
+  const offsets = new Map();
+  for (const part of state.parts) {
+    const own = state.partOffsets.get(part.id);
+    const extra = exploded.get(part.id);
+    if (!own && !extra) continue;
+    offsets.set(part.id, [0, 1, 2].map((i) => (own?.[i] || 0) + (extra?.[i] || 0)));
+  }
+  viewer.setPartOffsets(offsets);
+  if (gizmoPart !== null) viewer.placeGizmo(partCenter(gizmoPart));
 }
 
-/** Shows a saved view, including how far the assembly was exploded. */
+/** Turns the model so that the chosen CAD axis points up. */
+function applyUpAxis() {
+  if (viewer.setUpAxis(state.upAxis)) {
+    viewCube.setModelRotation(viewer.modelRoot.quaternion);
+    if (state.parts.length > 0) viewer.fit();
+  }
+}
+
+/** Centre of a part as it stands, in CAD coordinates. */
+function partCenter(id) {
+  const part = state.parts[id];
+  return part.mesh.geometry.boundingBox.getCenter(new Vector3()).add(part.mesh.position).toArray();
+}
+
+/** Shows the move gizmo on a part, or hides it (null). */
+function setGizmoPart(id) {
+  gizmoPart = id;
+  if (id === null) {
+    viewer.detachGizmo();
+    return;
+  }
+  let start = null;
+  viewer.attachGizmo(partCenter(id), (delta) => {
+    if (delta === null) {
+      start = null;
+      emit('geometry');
+      return;
+    }
+    start ??= [...(state.partOffsets.get(id) || [0, 0, 0])];
+    state.partOffsets.set(
+      id,
+      start.map((value, i) => Math.round((value + delta[i]) * 100) / 100),
+    );
+    applyExplode();
+    panelLive?.();
+  });
+}
+
+/** Shows a saved view or a render job's camera, including how far the assembly was exploded. */
 function showView(view) {
-  viewer.applyViewState(view);
+  viewer.applyViewState(view.camera || view);
   if (view.explode) {
-    state.explode = { ...view.explode };
+    state.explode = cloneExplode(view.explode);
     applyExplode();
   }
 }
@@ -169,10 +232,9 @@ function applySections() {
   viewer.setSectionHelper(edited ? sectionToPlane(edited) : null);
 }
 
-/** Direction from the model to the camera in CAD coordinates (Z up). */
+/** Direction from the model to the camera in CAD coordinates. */
 function cameraDirectionCad() {
-  const [x, y, z] = viewer.camera.position.clone().sub(viewer.controls.target).toArray();
-  return [x, -z, y];
+  return viewer.toCad(viewer.camera.position.clone().sub(viewer.controls.target)).toArray();
 }
 
 /** Whether a cut along `axis` must be flipped to keep the half away from the camera, so the cut face is in view. */
@@ -185,11 +247,14 @@ function addSection() {
   if (state.parts.length === 0) return;
   // Pick the horizontal axis the camera looks along most.
   const cad = cameraDirectionCad();
-  const axis = Math.abs(cad[0]) >= Math.abs(cad[1]) ? 0 : 1;
+  const up = viewer.toCad(new Vector3(0, 1, 0)).toArray().map(Math.abs);
+  const candidates = [0, 1, 2].filter((i) => up[i] < 0.5);
+  const axis = candidates.reduce((best, i) => (Math.abs(cad[i]) > Math.abs(cad[best]) ? i : best), candidates[0]);
   const center = viewer.modelBox.getCenter(new Vector3());
+  pendingSnapshot = snapshotProject();
   const section = {
     id: newId(),
-    name: `Schnitt ${state.sections.length + 1}`,
+    name: `Section ${state.sections.length + 1}`,
     axis,
     position: center.getComponent(axis),
     flip: sectionFacesCamera(axis),
@@ -200,13 +265,18 @@ function addSection() {
   select(`section:${section.id}`);
 }
 
-/** Pixel size of the final image for the current output settings. */
-function resolveOutputSize() {
-  const { output } = state;
+/** The render job whose panel is open, or null. */
+function selectedJob() {
+  const [kind, idText] = state.selected.split(':');
+  return kind === 'job' ? state.jobs.find((job) => job.id === Number(idText)) || null : null;
+}
+
+/** Pixel size of the final image for a render job (or the output defaults). */
+function resolveOutputSize(output = selectedJob() || state.output) {
   if (output.aspect === 'custom') return { width: output.width, height: output.height };
   let ratio = OUTPUT_ASPECTS[output.aspect]?.ratio;
   if (!ratio) {
-    // "Wie Ansicht": the proportions of the free part of the viewport.
+    // "Like the view": the proportions of the free part of the viewport.
     const region = viewer.getFreeRegion();
     ratio = Math.max(region.width, 1) / Math.max(region.height, 1);
   }
@@ -215,14 +285,15 @@ function resolveOutputSize() {
   return ratio >= 1 ? { width: even(long), height: even(long / ratio) } : { width: even(long * ratio), height: even(long) };
 }
 
-/** Shows the crop of the final image when its aspect ratio differs from the viewport. */
+/** Shows the crop of the final image while a render job is open, when its aspect ratio differs from the viewport. */
 function updateOutputFrame() {
-  const cropped = state.output.aspect !== 'view';
-  const { width, height } = resolveOutputSize();
+  const job = selectedJob();
+  const cropped = Boolean(job) && job.aspect !== 'view';
+  const { width, height } = resolveOutputSize(job || state.output);
   viewer.outputAspect = cropped ? width / height : null;
   viewer.outputMargin = cropped ? 14 : 0;
-  // The frame only shows while the output is being set up, so it does not get in the way otherwise.
-  const show = cropped && state.parts.length > 0 && state.selected === 'output';
+  // The frame only shows while a job is being set up, so it does not get in the way otherwise.
+  const show = cropped && state.parts.length > 0;
   outputFrameEl.hidden = !show;
   const frame = viewer.getOutputFrame(width / height);
   viewer.setBackdropFrame(frame);
@@ -289,24 +360,75 @@ function placeHighlight(light, point, normal) {
   light.el = Math.round(Math.min(Math.max((Math.asin(reflected.y) * 180) / Math.PI, -30), 90));
 }
 
+// --- Render jobs ----------------------------------------------------------------
+
+/** Creates a render job from the current camera, with the settings of the last job (or the defaults). */
+function createJob(type = 'image', { name, view } = {}) {
+  const source = state.jobs.at(-1) || state.output;
+  const count = state.jobs.filter((job) => job.type === type).length + 1;
+  const job = {
+    id: newId(),
+    name: name || `${type === 'animation' ? 'Turntable' : 'Image'} ${count}`,
+    type,
+    camera: view ? { position: view.position, target: view.target, fov: view.fov, roll: view.roll } : viewer.getViewState(),
+    explode: cloneExplode(view?.explode || state.explode),
+  };
+  for (const key of JOB_SETTINGS) job[key] = source[key] ?? state.output[key];
+  state.jobs.push(job);
+  return job;
+}
+
+function addJob(type = 'image') {
+  if (state.parts.length === 0) return;
+  pendingSnapshot = snapshotProject();
+  const job = createJob(type);
+  select(`job:${job.id}`);
+}
+
+/** One image job for each saved view that has none yet. */
+function jobsFromViews() {
+  const existing = new Set(state.jobs.map((job) => job.name));
+  const created = state.views.filter((view) => !existing.has(view.name)).map((view) => createJob('image', { name: view.name, view }));
+  emit('jobs');
+  return created.length;
+}
+
+function duplicateJob(job) {
+  pendingSnapshot = snapshotProject();
+  const copy = { ...structuredClone({ ...job, id: 0 }), id: newId(), name: `${job.name} copy` };
+  state.jobs.splice(state.jobs.indexOf(job) + 1, 0, copy);
+  select(`job:${copy.id}`);
+}
+
+function deleteJob(job) {
+  state.jobs = state.jobs.filter((other) => other !== job);
+  panelSnapshot = null;
+  select('output');
+}
+
 // --- Renderings ---------------------------------------------------------------
+
+/** True while a rendering puts its camera into the view; an open job must not take that over. */
+let applyingRenderView = false;
 
 function runningRender() {
   return state.renders.find((render) => render.status === 'running') || null;
 }
 
+const renderKey = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+
 /**
- * Puts a rendering into the queue. The camera, the exploded view and the
- * output settings are taken now; materials, lights and scene as they are when
- * its turn comes. `view` is a saved view to render instead of the current one,
- * `turntable` the number of images for a full turn of the model.
+ * Puts a render job into the queue. The job's camera, explosion and image
+ * settings are copied now; materials, lights and scene are taken as they are
+ * when its turn comes.
  */
-function queueRender({ name, view = null, turntable = 0 } = {}) {
-  const { width, height } = resolveOutputSize();
-  const output = { ...state.output, width, height };
+function queueRender(job) {
+  const { width, height } = resolveOutputSize(job);
+  const output = { ...job, width, height, device: state.output.device, gentle: state.output.gentle };
   const render = {
     id: newId(),
-    name: name || `Rendering ${state.renders.length + 1}`,
+    key: renderKey(),
+    name: job.name,
     status: 'queued',
     stage: 'building',
     progress: 0,
@@ -316,6 +438,7 @@ function queueRender({ name, view = null, turntable = 0 } = {}) {
     width,
     height,
     transparent: output.transparent,
+    format: output.format,
     denoised: false,
     note: null,
     deviceName: null,
@@ -324,14 +447,17 @@ function queueRender({ name, view = null, turntable = 0 } = {}) {
     url: null,
     error: null,
     output,
-    view: view
-      ? { position: view.position, target: view.target, fov: view.fov, roll: view.roll, explode: { ...view.explode } }
-      : { ...viewer.getViewState(), explode: { ...state.explode } },
+    view: { ...job.camera, explode: cloneExplode(job.explode) },
     // A turntable series keeps all its images; `shownFrame` is the one on screen.
-    turntable: turntable > 0 ? turntable : 0,
+    turntable: job.type === 'animation' ? job.turntableFrames : 0,
+    turntableSeconds: job.turntableSeconds,
     frames: [],
     frameIndex: 0,
     shownFrame: 0,
+    adjust: defaultAdjust(),
+    createdAt: Date.now(),
+    stored: false,
+    loaded: true,
   };
   state.renders.push(render);
   return render;
@@ -347,28 +473,22 @@ function canRender() {
   return true;
 }
 
-function beginRender() {
+/** Renders one job; its rendering opens so the progress can be watched. */
+function renderJob(job) {
   if (!canRender()) return;
-  const render = queueRender();
-  if (runningRender()) setStatus('Das Rendering startet, sobald das laufende fertig ist.', { timeout: 4000 });
+  const render = queueRender(job);
+  if (runningRender()) setStatus('The rendering starts as soon as the one before it is done.', { timeout: 4000 });
+  panelSnapshot = null;
   select(`render:${render.id}`);
   runQueue();
 }
 
-/** Queues one rendering for each saved view. */
-function renderAllViews() {
-  if (!canRender() || state.views.length === 0) return;
-  const renders = state.views.map((view) => queueRender({ name: view.name, view }));
-  select(`render:${renders[0].id}`);
-  runQueue();
-}
-
-/** Queues a turntable series: the model turns once, seen from the current camera. */
-function renderTurntable() {
-  if (!canRender()) return;
-  const frames = state.output.turntableFrames;
-  const render = queueRender({ name: `Drehteller ${frames} Bilder`, turntable: frames });
-  select(`render:${render.id}`);
+/** Puts all render jobs into the queue, in their order. */
+function renderAllJobs() {
+  if (!canRender() || state.jobs.length === 0) return;
+  for (const job of state.jobs) queueRender(job);
+  panelSnapshot = null;
+  select('renders');
   runQueue();
 }
 
@@ -386,6 +506,7 @@ async function runRender(render) {
 
   const { output } = render;
   const count = render.turntable || 1;
+  const projectId = state.project.id;
   const started = performance.now();
   try {
     // Loaded on demand so the path tracer does not slow down the start of the app.
@@ -408,8 +529,10 @@ async function runRender(render) {
         // Right before the scene is read: show the camera and explosion this rendering was queued with.
         prepare: () => {
           if (index === 0) {
+            applyingRenderView = true;
             viewer.applyViewState(render.view);
-            state.explode = { ...render.view.explode };
+            applyingRenderView = false;
+            state.explode = cloneExplode(render.view.explode);
             applyExplode();
           }
           return {
@@ -430,7 +553,7 @@ async function runRender(render) {
           render.seconds = (performance.now() - started) / 1000;
           if (stage === 'denoise-failed') {
             render.denoised = false;
-            render.note = 'Entrauschen nicht möglich';
+            render.note = 'denoising not possible';
           } else {
             render.stage = stage;
             let frameProgress = null;
@@ -472,10 +595,11 @@ async function runRender(render) {
 
     if (render.turntable ? render.frames.length > 0 : render.blob) {
       if (render.turntable && render.frames.length < count) {
-        render.note = `abgebrochen nach ${render.frames.length} von ${count} Bildern`;
+        render.note = `stopped after ${render.frames.length} of ${count} images`;
       }
       render.status = 'done';
       render.progress = 1;
+      if (projectId === state.project.id && state.renders.includes(render)) await storeRender(render, projectId);
     } else if (render.status === 'running') {
       render.status = 'cancelled';
     }
@@ -487,6 +611,93 @@ async function runRender(render) {
   }
   emit('renders');
   runQueue();
+}
+
+/** A small picture of a rendering for the gallery in the project overview. */
+async function renderThumbnail(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const scale = Math.min(360 / bitmap.width, 240 / bitmap.height, 1);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(Math.round(bitmap.width * scale), 1);
+  canvas.height = Math.max(Math.round(bitmap.height * scale), 1);
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+}
+
+/** Keeps a finished rendering with the project, so it is still there after a reload. */
+async function storeRender(render, projectId) {
+  const named = (blob, name) => new File([blob], name, { type: blob.type });
+  try {
+    if (render.turntable) {
+      await Promise.all(render.frames.map((frame, i) => files.put(fileKeys.render(projectId, render.key, i), named(frame.blob, `${i}.png`))));
+    } else {
+      await files.put(fileKeys.render(projectId, render.key), named(render.blob, 'image.png'));
+    }
+    const thumb = await renderThumbnail(render.turntable ? render.frames[0].blob : render.blob);
+    if (thumb) await files.put(fileKeys.renderThumbnail(projectId, render.key), named(thumb, 'thumb.jpg'));
+    render.stored = true;
+    scheduleSave();
+  } catch (error) {
+    console.warn('Rendering could not be stored.', error);
+  }
+}
+
+/** A rendering restored from the project record; its images load when they are needed. */
+function restoredRender(meta) {
+  return {
+    ...meta,
+    id: newId(),
+    status: 'done',
+    stage: 'done',
+    progress: 1,
+    targetSamples: meta.samples,
+    blob: null,
+    url: null,
+    error: null,
+    handle: null,
+    frames: [],
+    frameIndex: 0,
+    shownFrame: 0,
+    stored: true,
+    loaded: false,
+  };
+}
+
+/** Loads the images of a stored rendering (from any project) into a rendering object. */
+async function loadRenderImages(target, projectId) {
+  if (target.turntable) {
+    const loaded = await Promise.all(
+      Array.from({ length: target.frameCount }, (_, i) => files.get(fileKeys.render(projectId, target.key, i))),
+    );
+    if (loaded.some((file) => !file)) throw new Error('Some images of this rendering are missing.');
+    target.frames = loaded.map((blob) => ({ blob, url: URL.createObjectURL(blob), seconds: 0 }));
+  } else {
+    const blob = await files.get(fileKeys.render(projectId, target.key));
+    if (!blob) throw new Error('The image of this rendering is missing.');
+    target.blob = blob;
+    target.url = URL.createObjectURL(blob);
+  }
+  target.loaded = true;
+  return target;
+}
+
+/** Makes sure the images of a rendering of the open project are in memory. */
+function ensureRenderLoaded(render) {
+  if (render.loaded) return Promise.resolve(render);
+  render.loading ??= loadRenderImages(render, state.project.id)
+    .catch((error) => {
+      render.status = 'failed';
+      render.error = error.message;
+    })
+    .finally(() => {
+      render.loading = null;
+      emit('renders');
+    });
+  return render.loading;
 }
 
 function cancelRender(render) {
@@ -509,27 +720,29 @@ function deleteRender(render) {
   if (render === playing) stopPlaying();
   if (render.url) URL.revokeObjectURL(render.url);
   for (const frame of render.frames) URL.revokeObjectURL(frame.url);
+  if (render.stored) deleteRenderFiles(state.project.id, renderMeta(render));
   state.renders = state.renders.filter((other) => other !== render);
   select('renders');
 }
 
 /** Base of all file names: the project's name, or the model's. */
-function fileBase() {
-  return safeFileName(state.project.name) || safeFileName((state.fileName || 'Modell').replace(/\.(step|stp)$/i, ''));
+function fileBase(name = state.project.name) {
+  return safeFileName(name) || safeFileName((state.fileName || 'Model').replace(/\.(step|stp)$/i, ''));
 }
 
-/** The files of a finished rendering: one image, or the numbered images of a turntable series. */
-async function renderFiles(render, format, folder = '') {
+/** The files of a finished rendering, adjusted: one image, or the numbered images of a turntable series. */
+async function renderFiles(render, format, { folder = '', base = fileBase() } = {}) {
   const { extension } = FILE_FORMATS[format];
-  const name = `${fileBase()}_${safeFileName(render.name)}_${render.width}x${render.height}`;
-  if (!render.turntable) return [{ name: `${folder}${name}.${extension}`, blob: await convertImage(render.blob, format) }];
+  const name = `${base}_${safeFileName(render.name)}_${render.width}x${render.height}`;
+  const prepare = async (blob) => convertImage(await adjustImage(blob, render.adjust), format);
+  if (!render.turntable) return [{ name: `${folder}${name}.${extension}`, blob: await prepare(render.blob) }];
   const digits = String(render.frames.length).length;
-  return Promise.all(
-    render.frames.map(async (frame, i) => ({
-      name: `${folder}${name}_${String(i + 1).padStart(Math.max(digits, 3), '0')}.${extension}`,
-      blob: await convertImage(frame.blob, format),
-    })),
-  );
+  const result = [];
+  // One after the other, so a long series does not hold all decoded images at once.
+  for (const [i, frame] of render.frames.entries()) {
+    result.push({ name: `${folder}${name}_${String(i + 1).padStart(Math.max(digits, 3), '0')}.${extension}`, blob: await prepare(frame.blob) });
+  }
+  return result;
 }
 
 async function exporting(text, run) {
@@ -539,37 +752,43 @@ async function exporting(text, run) {
     setStatus('');
   } catch (error) {
     console.error(error);
-    setStatus(`Speichern fehlgeschlagen: ${error?.message || error}`, { error: true, timeout: 6000 });
+    setStatus(`Saving failed: ${error?.message || error}`, { error: true, timeout: 6000 });
   }
 }
 
 /** Saves one rendering in the given format; a turntable series as a ZIP archive. */
-function saveRender(render, format = state.output.format) {
-  return exporting('Bilder werden gespeichert …', async () => {
-    const files = await renderFiles(render, format);
+function saveRender(render, format = render.format || 'png', base = fileBase()) {
+  return exporting('Saving images …', async () => {
+    await ensureRenderLoaded(render);
+    const files = await renderFiles(render, format, { base });
     if (files.length === 1) downloadBlob(files[0].blob, files[0].name.split('/').pop());
-    else downloadBlob(await zipFiles(files), `${fileBase()}_${safeFileName(render.name)}.zip`);
+    else downloadBlob(await zipFiles(files), `${base}_${safeFileName(render.name)}.zip`);
   });
 }
 
 /** Saves all finished renderings in one ZIP archive, turntable series in folders of their own. */
-function saveAllRenders() {
+function saveAllRenders(format = 'png') {
   const done = state.renders.filter((render) => render.status === 'done');
   if (done.length === 0) return;
-  return exporting('Bilder werden gespeichert …', async () => {
+  return exporting('Saving images …', async () => {
     const files = [];
     for (const render of done) {
-      files.push(...(await renderFiles(render, state.output.format, render.turntable ? `${safeFileName(render.name)}/` : '')));
+      await ensureRenderLoaded(render);
+      if (!render.loaded) continue;
+      files.push(...(await renderFiles(render, format, { folder: render.turntable ? `${safeFileName(render.name)}/` : '' })));
     }
     downloadBlob(await zipFiles(files), `${fileBase()}_Renderings.zip`);
   });
 }
 
 /** Saves a turntable series as a video of one full turn. */
-function saveVideo(render) {
-  return exporting('Video wird aufgenommen …', async () => {
-    const { blob, extension } = await recordVideo(render.frames.map((frame) => frame.blob));
-    downloadBlob(blob, `${fileBase()}_${safeFileName(render.name)}_${render.width}x${render.height}.${extension}`);
+function saveVideo(render, base = fileBase()) {
+  return exporting('Recording video …', async () => {
+    await ensureRenderLoaded(render);
+    const blobs = [];
+    for (const frame of render.frames) blobs.push(await adjustImage(frame.blob, render.adjust));
+    const { blob, extension } = await recordVideo(blobs, { seconds: render.turntableSeconds || 6 });
+    downloadBlob(blob, `${base}_${safeFileName(render.name)}_${render.width}x${render.height}.${extension}`);
   });
 }
 
@@ -599,7 +818,7 @@ function togglePlaying(render) {
       render.shownFrame = (render.shownFrame + 1) % render.frames.length;
       updateRenderView();
       panelLive?.();
-    }, (TURN_SECONDS * 1000) / render.frames.length);
+    }, ((render.turntableSeconds || 6) * 1000) / render.frames.length);
   }
   panelLive?.();
 }
@@ -608,6 +827,20 @@ function showFrame(render, index) {
   render.shownFrame = Math.min(Math.max(index, 0), render.frames.length - 1);
   updateRenderView();
 }
+
+/** Lays the vignette overlay exactly over the image shown in the render view. */
+function placeVignette() {
+  const image = renderViewEl.querySelector('img');
+  const overlay = renderViewEl.querySelector('.vignette');
+  if (!image || !overlay) return;
+  Object.assign(overlay.style, {
+    left: `${image.offsetLeft}px`,
+    top: `${image.offsetTop}px`,
+    width: `${image.offsetWidth}px`,
+    height: `${image.offsetHeight}px`,
+  });
+}
+new ResizeObserver(placeVignette).observe(renderViewEl);
 
 /** Shows the selected rendering over the viewport, live while it runs and as an image afterwards. */
 function updateRenderView() {
@@ -618,6 +851,7 @@ function updateRenderView() {
     renderViewEl.replaceChildren();
     return;
   }
+  if (render.status === 'done' && !render.loaded) ensureRenderLoaded(render);
 
   // A finished image, or the last finished image of a turntable series that is still running.
   const frame = render.turntable ? render.frames[render.shownFrame] : null;
@@ -625,12 +859,18 @@ function updateRenderView() {
     render.status === 'done' ? (frame?.url ?? render.url) : render.status === 'running' && !render.handle ? frame?.url : null;
   const current = renderViewEl.firstChild;
   if (imageUrl) {
-    if (current?.tagName === 'IMG') {
+    let image = current?.tagName === 'IMG' ? current : null;
+    if (image) {
       // Swapping the source keeps playback free of flicker.
-      if (current.src !== imageUrl) current.src = imageUrl;
+      if (image.src !== imageUrl) image.src = imageUrl;
     } else {
-      renderViewEl.replaceChildren(h('img', { src: imageUrl, alt: render.name }));
+      image = h('img', { src: imageUrl, alt: render.name, onload: placeVignette });
+      renderViewEl.replaceChildren(image, h('div', { class: 'vignette' }));
     }
+    const css = adjustCss(render.adjust);
+    image.style.filter = css.filter;
+    renderViewEl.querySelector('.vignette').style.background = css.vignette;
+    placeVignette();
     return;
   }
   const canvas = render.status === 'running' ? render.handle?.canvas : null;
@@ -640,10 +880,12 @@ function updateRenderView() {
   }
   const text =
     render.status === 'running'
-      ? 'Szene wird vorbereitet …'
+      ? 'Preparing the scene …'
       : render.status === 'queued'
-        ? 'Wartet, bis die Renderings davor fertig sind'
-        : 'Kein Bild vorhanden';
+        ? 'Waiting until the renderings before it are done'
+        : render.status === 'done'
+          ? 'Loading …'
+          : 'No image';
   if (current?.className !== 'render-placeholder' || current.textContent !== text) {
     renderViewEl.replaceChildren(h('p', { class: 'render-placeholder' }, text));
   }
@@ -674,7 +916,6 @@ async function restoreHdri(token) {
     state.lighting.presetId = 'studio-soft';
     state.lighting.hdriName = null;
     state.lighting.lights = withIds(presetLights(getLightPreset('studio-soft')));
-    if (state.scene.background === 'environment') state.scene.background = 'light';
   }
   emit('lighting');
 }
@@ -695,12 +936,13 @@ async function loadModel(file, { record, store }) {
   const token = projectToken;
   loading = true;
   showModelUi();
-  setStatus(`Lade ${file.name} …`);
+  setStatus(`Loading ${file.name} …`);
   const started = performance.now();
   try {
     const parts = await loadStepFile(file);
     if (token !== projectToken) return;
 
+    setGizmoPart(null);
     viewer.setParts(parts);
     resetForModel(file.name, parts);
     const restored = applyModelData(record);
@@ -716,14 +958,14 @@ async function loadModel(file, { record, store }) {
     if (store) files.put(fileKeys.step(state.project.id), file);
 
     // Long part lists start folded so the steps below stay in sight.
-    setCollapsed('geometry', parts.length > 12);
+    setCollapsed('parts', parts.length > 12);
     if (store) state.selected = 'geometry';
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
-    setStatus(`${file.name} geladen (${seconds} s)`, { timeout: 2500 });
+    setStatus(`${file.name} loaded (${seconds} s)`, { timeout: 2500 });
   } catch (error) {
     if (token !== projectToken) return;
     console.error(error);
-    setStatus(`Import fehlgeschlagen: ${error.message}`, { error: true });
+    setStatus(`Import failed: ${error.message}`, { error: true });
   } finally {
     if (token === projectToken) {
       loading = false;
@@ -741,11 +983,15 @@ async function openProject(record) {
   loading = false;
   resetForProject(record);
   setPendingPalette(null);
+  setGizmoPart(null);
+  panelSnapshot = null;
   viewer.setCustomEnvironment(null);
   viewer.setFov(35);
   viewer.setParts([]);
   applySettings(record);
-  state.selected = 'project';
+  // Finished renderings come back without their images, which load when they are looked at.
+  state.renders = (record.renders || []).map(sanitizeRenderMeta).filter(Boolean).map(restoredRender);
+  state.selected = 'geometry';
   showModelUi();
   emit('model');
 
@@ -757,7 +1003,7 @@ async function openProject(record) {
     if (file) {
       await loadModel(file, { record, store: false });
     } else {
-      setStatus(`${record.fileName} ist nicht mehr gespeichert. Bitte die Datei erneut öffnen.`, { error: true });
+      setStatus(`${record.fileName} is no longer stored. Please open the file again.`, { error: true });
     }
   }
   if (token === projectToken) suspendSaving(false);
@@ -786,7 +1032,7 @@ async function applyTemplate(id) {
   }
   if (template.fov) viewer.setFov(template.fov);
   emit('model');
-  setStatus(`Vorlage „${template.name}“ angewendet`, { timeout: 2500 });
+  setStatus(`Template "${template.name}" applied`, { timeout: 2500 });
 }
 
 // --- Project files ------------------------------------------------------------
@@ -799,19 +1045,72 @@ function exportProject(id = state.project.id) {
   saveNow();
   const record = getProject(id);
   if (!record) return;
-  return exporting('Projekt wird exportiert …', async () => {
+  return exporting('Exporting project …', async () => {
     const step = record.fileName ? await files.get(fileKeys.step(record.id)) : null;
     const hdri = record.lighting?.presetId === 'custom' ? await files.get(fileKeys.hdri(record.id)) : null;
     const blob = await packProject(record, { step, hdri });
-    downloadBlob(blob, `${safeFileName(record.name) || 'Projekt'}.${PROJECT_EXTENSION}`);
+    downloadBlob(blob, `${safeFileName(record.name) || 'Project'}.${PROJECT_EXTENSION}`);
   });
 }
 
 // --- Project overview -----------------------------------------------------------
 
 let overviewOpen = false;
+/**
+ * A dialog over the overview: { mode: 'new' }, { mode: 'edit', id } (name and
+ * template of a project) or { mode: 'gallery', id, key } (its renderings, `key` the one shown large).
+ */
+let overviewDialog = null;
 /** Preview images of the projects as object URLs, by project id. */
 const thumbnails = new Map();
+/** Small pictures of stored renderings as object URLs, by storage key. */
+const renderThumbnails = new Map();
+/** The rendering shown large in the gallery, with its images loaded. */
+let galleryRender = null;
+
+function setOverviewDialog(dialog) {
+  overviewDialog = dialog;
+  if (galleryRender && (dialog?.mode !== 'gallery' || dialog.key !== galleryRender.key)) {
+    if (galleryRender.url) URL.revokeObjectURL(galleryRender.url);
+    for (const frame of galleryRender.frames || []) URL.revokeObjectURL(frame.url);
+    galleryRender = null;
+  }
+  if (overviewOpen) renderOverview(overviewEl, actions);
+}
+
+/** Render metadata of a project; for the open project the live list, so new renderings show up at once. */
+function projectRenders(id) {
+  if (id === state.project.id) return state.renders.filter((render) => render.stored).map(renderMeta);
+  return (getProject(id)?.renders || []).map(sanitizeRenderMeta).filter(Boolean);
+}
+
+async function loadRenderThumbnail(projectId, key) {
+  if (renderThumbnails.has(key)) return;
+  renderThumbnails.set(key, null);
+  const file = await files.get(fileKeys.renderThumbnail(projectId, key));
+  if (!file) return;
+  renderThumbnails.set(key, URL.createObjectURL(file));
+  if (overviewOpen) renderOverview(overviewEl, actions);
+}
+
+/** Opens a rendering of any project large in the gallery. */
+async function showGalleryRender(projectId, key) {
+  setOverviewDialog({ mode: 'gallery', id: projectId, key });
+  const meta = projectRenders(projectId).find((item) => item.key === key);
+  if (!meta) return;
+  try {
+    const loaded = await loadRenderImages({ ...meta, frames: [], blob: null, url: null }, projectId);
+    if (overviewDialog?.mode !== 'gallery' || overviewDialog.key !== key) {
+      if (loaded.url) URL.revokeObjectURL(loaded.url);
+      for (const frame of loaded.frames) URL.revokeObjectURL(frame.url);
+      return;
+    }
+    galleryRender = loaded;
+  } catch (error) {
+    setStatus(error.message, { error: true, timeout: 5000 });
+  }
+  if (overviewOpen) renderOverview(overviewEl, actions);
+}
 
 /** Stores a small picture of the current view as the project's preview. */
 async function saveThumbnail() {
@@ -852,6 +1151,7 @@ function showOverview(open) {
     saveNow();
     saveThumbnail().then(() => overviewOpen && renderOverview(overviewEl, actions));
   }
+  if (!open) setOverviewDialog(null);
   overviewOpen = open;
   overviewEl.hidden = !open;
   document.body.classList.toggle('overview-open', open);
@@ -870,7 +1170,7 @@ async function importProjectFile(file) {
   if (!file) return;
   let data;
   try {
-    setStatus(`Lese ${file.name} …`);
+    setStatus(`Reading ${file.name} …`);
     data = await unpackProject(file);
     setStatus('');
   } catch (error) {
@@ -897,7 +1197,7 @@ async function finishImport(data, replace) {
   const record = await importProject(data.record, { step: data.step, hdri: data.hdri, replace });
   setCurrentProject(record.id);
   await openProject(record);
-  setStatus(`Projekt „${record.name}“ importiert`, { timeout: 3000 });
+  setStatus(`Project "${record.name}" imported`, { timeout: 3000 });
 }
 
 // --- Tree and panel -----------------------------------------------------------
@@ -907,15 +1207,94 @@ function selectionHighlight() {
   return kind === 'part' ? [Number(idText)] : clickHighlight;
 }
 
+/** Panels where clicking a part in the viewport does something, so parts light up under the pointer. */
+function pickingParts() {
+  const [kind] = state.selected.split(':');
+  return ['', 'geometry', 'parts', 'part', 'materials', 'material', 'section'].includes(kind);
+}
+
+/** Closes the open panel and keeps its changes, which are saved already. */
+function applyPanel() {
+  panelSnapshot = null;
+  saveNow();
+  select('');
+}
+
+/** Closes the open panel and takes back everything changed since it was opened. */
+function discardPanel() {
+  const snapshot = panelSnapshot;
+  panelSnapshot = null;
+  if (!snapshot) {
+    select('');
+    return;
+  }
+  const { key, data } = snapshot;
+  setGizmoPart(null);
+  applySettings(data);
+  if (state.parts.length > 0 && data.fileName) {
+    const restored = applyModelData({ ...data, fileName: state.fileName, partCount: state.parts.length });
+    if (restored) {
+      const hidden = new Set(restored.hidden);
+      for (const part of state.parts) viewer.setPartVisible(part.id, !hidden.has(part.id));
+      // Only the camera panel takes the camera back; elsewhere it was moved just to look.
+      if (key === 'views' && restored.view) viewer.applyViewState(restored.view);
+    }
+  }
+  state.selected = '';
+  emit('model');
+}
+
+/** Creates a project, optionally with the settings of a template, and opens it. */
+async function newProject(name, templateId = null) {
+  saveNow();
+  await saveThumbnail();
+  showOverview(false);
+  const record = createProject(name);
+  setCurrentProject(record.id);
+  await openProject(record);
+  if (templateId) await applyTemplate(templateId);
+}
+
 const actions = {
   openFile: () => fileInput.click(),
-  newProject: async () => {
-    saveNow();
-    await saveThumbnail();
-    showOverview(false);
-    const record = createProject();
-    setCurrentProject(record.id);
-    await openProject(record);
+  newProject: () => {
+    showOverview(true);
+    setOverviewDialog({ mode: 'new' });
+  },
+  createProject: newProject,
+  nextProjectName,
+  /** Renames a project and applies a template to it, which opens it. */
+  saveProjectSettings: async (id, name, templateId) => {
+    const record = renameProject(id, name);
+    if (id === state.project.id && record) state.project.name = record.name;
+    setOverviewDialog(null);
+    emit('project');
+    if (templateId) {
+      await openFromOverview(id);
+      await applyTemplate(templateId);
+    }
+  },
+  editProject: (id = state.project.id) => {
+    showOverview(true);
+    setOverviewDialog({ mode: 'edit', id });
+  },
+  openGallery: (id) => setOverviewDialog({ mode: 'gallery', id, key: null }),
+  showGalleryRender,
+  closeDialog: () => setOverviewDialog(null),
+  dialog: () => overviewDialog,
+  projectRenders,
+  renderThumbnailUrl: (projectId, key) => {
+    loadRenderThumbnail(projectId, key);
+    return renderThumbnails.get(key) || null;
+  },
+  galleryRender: () => galleryRender,
+  saveGalleryRender: (format) => {
+    const record = getProject(overviewDialog?.id);
+    if (galleryRender && record) saveRender(galleryRender, format, fileBase(record.name));
+  },
+  saveGalleryVideo: () => {
+    const record = getProject(overviewDialog?.id);
+    if (galleryRender && record) saveVideo(galleryRender, fileBase(record.name));
   },
   switchProject,
   openOverview: () => showOverview(true),
@@ -945,7 +1324,7 @@ const actions = {
   saveTemplate: async (name) => {
     await saveTemplate(name);
     emit('project');
-    setStatus(`Vorlage „${name}“ gespeichert`, { timeout: 2500 });
+    setStatus(`Template "${name}" saved`, { timeout: 2500 });
   },
   applyTemplate,
   exportProject,
@@ -974,20 +1353,34 @@ const actions = {
   },
   addMaterial: () => {
     if (state.parts.length === 0) return;
+    pendingSnapshot = snapshotProject();
     const entry = addMaterial();
     select(`material:${entry.id}`);
   },
   showView,
   addView: () => {
     if (state.parts.length === 0) return;
+    pendingSnapshot = snapshotProject();
     const view = {
       id: newId(),
-      name: `Ansicht ${state.views.length + 1}`,
+      name: `View ${state.views.length + 1}`,
       ...viewer.getViewState(),
-      explode: { ...state.explode },
+      explode: cloneExplode(state.explode),
     };
     state.views.push(view);
     select(`view:${view.id}`);
+  },
+  addJob,
+  addAnimationJob: () => addJob('animation'),
+  jobsFromViews,
+  duplicateJob,
+  deleteJob,
+  renderJob,
+  renderAllJobs,
+  /** Copies a job's image settings to the defaults, so the next job starts from them. */
+  jobChanged: (job) => {
+    for (const key of JOB_SETTINGS) state.output[key] = job[key];
+    emit('jobs');
   },
   togglePart: (id) => {
     viewer.setPartVisible(id, !state.parts[id].mesh.visible);
@@ -1001,12 +1394,25 @@ const actions = {
     for (const part of state.parts) viewer.setPartVisible(part.id, part.id === id);
     emit('geometry');
   },
+  setPartOffset: (id, offset) => {
+    if (offset && offset.some((value) => value !== 0)) state.partOffsets.set(id, offset);
+    else state.partOffsets.delete(id);
+    emit('geometry');
+  },
+  toggleGizmo: (id) => {
+    setGizmoPart(gizmoPart === id ? null : id);
+    emit('geometry:live');
+  },
+  isGizmoOn: (id) => gizmoPart === id,
+  axesVisible: () => viewer.axesHelper.visible,
+  toggleAxes,
   hover: (ids) => viewer.setHighlight(ids ?? selectionHighlight()),
   loadHdri: () => hdriInput.click(),
   addLight: () => {
     const names = state.lighting.lights.map((light) => light.name);
     let number = state.lighting.lights.length + 1;
     while (names.includes(`Softbox ${number}`)) number += 1;
+    pendingSnapshot = snapshotProject();
     const [light] = withIds([newLight(`Softbox ${number}`)]);
     state.lighting.lights.push(light);
     select(`light:${light.id}`);
@@ -1028,21 +1434,20 @@ const actions = {
   },
   isPickingFocus: () => pickingFocus,
   focusDistance,
-  startRender: beginRender,
-  renderAllViews,
-  renderTurntable,
   cancelRender,
   cancelQueue,
   deleteRender,
-  saveRender,
+  saveRender: (render, format) => saveRender(render, format),
   saveAllRenders,
-  saveVideo,
+  saveVideo: (render) => saveVideo(render),
   togglePlaying,
   isPlaying: (render) => playing === render,
   showFrame,
   resolveOutputSize,
   fit: () => viewer.fit(),
   closePanel: () => select(''),
+  applyPanel,
+  discardPanel,
   renderSupported: isRenderSupported(),
 };
 
@@ -1050,30 +1455,45 @@ function refresh(what) {
   const live = what.endsWith(':live');
   const area = what.replace(':live', '');
 
-  if (area === 'model' || area === 'materials') applyMaterials();
-  if (area === 'model' || area === 'explode') applyExplode();
-  if (area === 'model' || area === 'scene' || area === 'lighting') applySceneAndLighting();
-  if (area === 'model' || area === 'sections' || what === 'selection') applySections();
-
   if (what === 'selection') {
+    // Remember the project as it is before the panel changes anything, for discarding.
+    if (state.selected !== panelSnapshot?.key) {
+      panelSnapshot = state.selected ? { key: state.selected, data: pendingSnapshot || snapshotProject() } : null;
+    }
+    pendingSnapshot = null;
     clickHighlight = [];
     if (pickingFocus && state.selected !== 'views') setPickingFocus(false);
     if (pickingHighlight && state.selected !== `light:${pickingHighlight.id}`) setPickingHighlight(null);
+    if (gizmoPart !== null && state.selected !== `part:${gizmoPart}`) setGizmoPart(null);
     const [kind, idText] = state.selected.split(':');
     if (kind === 'view') {
       const view = state.views.find((item) => item.id === Number(idText));
       if (view) showView(view);
     }
+    const job = selectedJob();
+    if (job) showView(job);
+    viewer.setHoverEnabled(pickingParts());
   }
+  // An open render job keeps the explosion set in its panel.
+  if (area === 'explode') {
+    const job = selectedJob();
+    if (job) job.explode = cloneExplode(state.explode);
+  }
+
+  if (area === 'model' || area === 'geometry') applyUpAxis();
+  if (area === 'model' || area === 'materials') applyMaterials();
+  if (area === 'model' || area === 'explode' || area === 'geometry') applyExplode();
+  if (area === 'model' || area === 'scene' || area === 'lighting') applySceneAndLighting();
+  if (area === 'model' || area === 'sections' || what === 'selection') applySections();
   if (!live) viewer.setHighlight(selectionHighlight());
 
   scheduleSave();
-  projectChip.textContent = state.project.name || 'Projekt';
+  projectChip.textContent = state.project.name || 'Project';
   if (overviewOpen && !live) renderOverview(overviewEl, actions);
   if (!live && what !== 'selection' && !what.startsWith('render')) scheduleThumbnail();
   renderTree(treeEl, actions);
   if (live) panelLive?.();
-  else panelLive = renderPanel(panelEl, { viewer, actions });
+  else panelLive = renderPanel(panelEl, { viewer, actions, editable: Boolean(panelSnapshot) });
   updateInset();
   updateOutputFrame();
   updateRenderView();
@@ -1087,8 +1507,15 @@ viewer.onViewChange = () => {
   viewCube.update();
   updateOutputFrame();
   updateFocusMarker();
-  if (state.selected === 'views') panelLive?.();
+  // An open render job takes the camera along.
+  const job = applyingRenderView ? null : selectedJob();
+  if (job) job.camera = viewer.getViewState();
+  if (state.selected === 'views' || job) panelLive?.();
   scheduleSave();
+};
+
+viewer.onPartHover = (partId) => {
+  viewer.canvas.title = partId === null ? '' : state.parts[partId]?.label || '';
 };
 
 viewer.onPartClick = (partId, point, normal) => {
@@ -1096,7 +1523,7 @@ viewer.onPartClick = (partId, point, normal) => {
     if (!point) return;
     placeHighlight(pickingHighlight, point, normal);
     if (pickingHighlight.el < 0 && state.scene.floor !== 'none' && !state.output.transparent) {
-      setStatus('Das Licht liegt unter dem Horizont und wird im Rendering vom Boden verdeckt.', { timeout: 5000 });
+      setStatus('The light is below the horizon; the floor hides it in the rendering.', { timeout: 5000 });
     }
     setPickingHighlight(null);
     emit('lighting');
@@ -1122,10 +1549,21 @@ viewer.onPartClick = (partId, point, normal) => {
     );
     return;
   }
+  const section = kind === 'section' ? state.sections.find((item) => item.id === Number(idText)) : null;
+  if (section && partId !== null) {
+    // While a section is open, clicking a part switches whether it is cut.
+    const cut = section.uncut.has(partId);
+    for (const item of identicalParts(state.parts[partId])) {
+      if (cut) section.uncut.delete(item.id);
+      else section.uncut.add(item.id);
+    }
+    emit('sections');
+    return;
+  }
 
   // Around the geometry step a click opens the part; elsewhere it only points it out,
   // so the panel being worked in stays open.
-  const browsing = ['', 'project', 'geometry', 'part', 'materials'].includes(kind) || state.selected === 'material:cad';
+  const browsing = ['', 'geometry', 'parts', 'part', 'materials'].includes(kind) || state.selected === 'material:cad';
   if (browsing) {
     if (partId !== null) select(`part:${partId}`);
     else if (kind === 'part') select('geometry');
@@ -1141,11 +1579,11 @@ viewer.onPartClick = (partId, point, normal) => {
 async function openFile(file) {
   if (!file) return;
   if (loading) {
-    setStatus('Es wird noch ein Modell geladen. Bitte kurz warten und dann erneut öffnen.', { error: true, timeout: 4000 });
+    setStatus('A model is still loading. Please wait a moment and open it again.', { error: true, timeout: 4000 });
     return;
   }
   if (!/\.(step|stp)$/i.test(file.name)) {
-    setStatus('Bitte eine STEP-Datei wählen (.step oder .stp).', { error: true });
+    setStatus('Please choose a STEP file (.step or .stp).', { error: true });
     return;
   }
   await loadModel(file, { record: currentRecord(), store: true });
@@ -1158,7 +1596,7 @@ fileInput.addEventListener('change', () => {
 
 async function openHdri(file) {
   if (!file) return;
-  setStatus(`Lade ${file.name} …`);
+  setStatus(`Loading ${file.name} …`);
   try {
     viewer.setCustomEnvironment(await loadHdriFile(file));
     // The softboxes of a preset do not belong into a photographed environment.
@@ -1167,10 +1605,10 @@ async function openHdri(file) {
     state.lighting.hdriName = file.name;
     files.put(fileKeys.hdri(state.project.id), file);
     emit('lighting');
-    setStatus(`${file.name} geladen`, { timeout: 2500 });
+    setStatus(`${file.name} loaded`, { timeout: 2500 });
   } catch (error) {
     console.error(error);
-    setStatus(`HDRI konnte nicht geladen werden: ${error.message}`, { error: true });
+    setStatus(`The HDRI could not be loaded: ${error.message}`, { error: true });
   }
 }
 
@@ -1212,10 +1650,7 @@ window.addEventListener('drop', (event) => {
 // --- Viewport tools -----------------------------------------------------------
 
 $('#fit-btn').addEventListener('click', () => viewer.fit());
-projectChip.addEventListener('click', () => {
-  showOverview(false);
-  select('project');
-});
+projectChip.addEventListener('click', () => actions.editProject());
 projectsBtn.addEventListener('click', () => showOverview(!overviewOpen));
 
 function toggleEdges() {
@@ -1225,15 +1660,27 @@ function toggleEdges() {
 }
 edgesBtn.addEventListener('click', toggleEdges);
 
+function toggleAxes() {
+  const visible = !viewer.axesHelper.visible;
+  viewer.setAxesVisible(visible);
+  axesBtn.setAttribute('aria-pressed', String(visible));
+  if (state.selected === 'geometry') emit('geometry:live');
+}
+axesBtn.addEventListener('click', toggleAxes);
+
 window.addEventListener('keydown', (event) => {
   const tag = event.target.tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || event.metaKey || event.ctrlKey) return;
   if (overviewOpen) {
-    if (event.key === 'Escape') showOverview(false);
+    if (event.key === 'Escape') {
+      if (overviewDialog) setOverviewDialog(overviewDialog.mode === 'gallery' && overviewDialog.key ? { ...overviewDialog, key: null } : null);
+      else showOverview(false);
+    }
     return;
   }
   if (event.key === 'f' || event.key === 'F') viewer.fit();
   if (event.key === 'e' || event.key === 'E') toggleEdges();
+  if (event.key === 'a' || event.key === 'A') toggleAxes();
   if (event.key === 'Escape') {
     if (pickingFocus) actions.pickFocus();
     if (pickingHighlight) actions.pickHighlight(pickingHighlight);

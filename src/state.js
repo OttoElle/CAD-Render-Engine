@@ -24,10 +24,29 @@ export const defaultScene = () => ({
   reflectionBlur: 0.1,
 });
 
+/** Floor shapes. */
 export const FLOORS = {
-  shadow: 'Boden mit Schatten',
-  cove: 'Hohlkehle',
-  none: 'Kein Boden',
+  shadow: 'Flat floor',
+  cove: 'Cove (curves up behind the model)',
+  none: 'No floor',
+};
+
+/** Solid background colours by name; anything else is a hex colour. */
+export const BACKGROUND_COLORS = {
+  light: 'Light',
+  white: 'White',
+  grey: 'Grey',
+  dark: 'Dark',
+};
+
+/** Which CAD axis points up in the scene. */
+export const UP_AXES = {
+  '+Z': '+Z (usual for CAD)',
+  '+Y': '+Y',
+  '+X': '+X',
+  '-Z': '−Z',
+  '-Y': '−Y',
+  '-X': '−X',
 };
 export const defaultLighting = () => ({
   presetId: 'studio-soft',
@@ -38,9 +57,13 @@ export const defaultLighting = () => ({
 });
 export const defaultCamera = () => ({ dof: false, fStop: 4, focusPoint: null });
 export const defaultSectionCap = () => ({ mode: 'material', color: '#d9534f' });
+/**
+ * Rendering device and the settings new render jobs start with. A job copies
+ * these; afterwards it keeps its own.
+ */
 export const defaultOutput = () => ({
   /** Proportions (see OUTPUT_ASPECTS) and the longer side in pixels; `width`/`height` for a custom size. */
-  aspect: 'view',
+  aspect: '16:9',
   resolution: 1920,
   width: 1920,
   height: 1080,
@@ -53,10 +76,31 @@ export const defaultOutput = () => ({
   format: 'png',
   /** Images per turn of a turntable series. */
   turntableFrames: 36,
+  /** Length of one turn in the video, in seconds. */
+  turntableSeconds: 6,
 });
 
 /** Choices for the number of images in a turntable series. */
 export const TURNTABLE_FRAMES = [24, 36, 72, 120];
+/** Choices for the length of one turn in the video. */
+export const TURNTABLE_SECONDS = [4, 6, 8, 12];
+
+/** Settings of a render job that come from the output defaults. */
+export const JOB_SETTINGS = [
+  'aspect',
+  'resolution',
+  'width',
+  'height',
+  'quality',
+  'denoise',
+  'format',
+  'transparent',
+  'turntableFrames',
+  'turntableSeconds',
+];
+
+/** Image adjustments of a finished rendering, each from -100 to 100 (vignette 0 to 100). */
+export const defaultAdjust = () => ({ exposure: 0, contrast: 0, saturation: 0, warmth: 0, vignette: 0 });
 
 /**
  * Application state for everything the tree shows. The viewer owns the 3D
@@ -97,35 +141,47 @@ export const state = {
   lighting: defaultLighting(),
   /** Lens settings that only show in the final rendering. `focusPoint` is a world position or null (pivot). */
   camera: defaultCamera(),
-  /** Exploded view: `amount` (0 = assembled, 1 = distances doubled) and `direction` (see EXPLODE_DIRECTIONS). */
+  /** Exploded view, see defaultExplode in explode.js. */
   explode: defaultExplode(),
+  /** Which CAD axis points up (see UP_AXES). */
+  upAxis: '+Z',
+  /** Parts moved by the user: part id → [x, y, z] offset in CAD coordinates (mm). */
+  partOffsets: new Map(),
   /** Saved views: { id, name, position, target, fov, roll, explode }. */
   views: [],
   output: defaultOutput(),
-  /** Renderings: { id, name, status, progress, samples, width, height, blob, url, handle, seconds }. */
+  /**
+   * Render jobs: { id, name, type ('image' or 'animation'), camera (a view state), explode,
+   * and the settings listed in JOB_SETTINGS }.
+   */
+  jobs: [],
+  /**
+   * Renderings: { id, key (stable id for storage), name, status, progress, samples, width, height,
+   * blob, url, handle, seconds, frames, adjust, stored, loaded }.
+   */
   renders: [],
   /** Key of the tree node whose settings are shown, e.g. "geometry" or "material:3". */
   selected: 'geometry',
 };
 
 export const QUALITY = {
-  draft: { label: 'Entwurf', samples: 64 },
+  draft: { label: 'Draft', samples: 64 },
   standard: { label: 'Standard', samples: 256 },
-  high: { label: 'Hoch', samples: 1024 },
-  ultra: { label: 'Sehr hoch', samples: 4096 },
+  high: { label: 'High', samples: 1024 },
+  ultra: { label: 'Very high', samples: 4096 },
 };
 
-/** Image proportions; `ratio` is width / height. "Wie Ansicht" follows the free part of the viewport. */
+/** Image proportions; `ratio` is width / height. "Like the view" follows the free part of the viewport. */
 export const OUTPUT_ASPECTS = {
-  view: { label: 'Wie Ansicht' },
-  '16:9': { label: 'Querformat 16:9', ratio: 16 / 9 },
-  '3:2': { label: 'Querformat 3:2', ratio: 3 / 2 },
-  '4:3': { label: 'Querformat 4:3', ratio: 4 / 3 },
-  '1:1': { label: 'Quadrat 1:1', ratio: 1 },
-  '4:5': { label: 'Hochformat 4:5', ratio: 4 / 5 },
-  '2:3': { label: 'Hochformat 2:3', ratio: 2 / 3 },
-  '9:16': { label: 'Hochformat 9:16', ratio: 9 / 16 },
-  custom: { label: 'Eigene Größe in Pixeln' },
+  view: { label: 'Like the view' },
+  '16:9': { label: 'Landscape 16:9', ratio: 16 / 9 },
+  '3:2': { label: 'Landscape 3:2', ratio: 3 / 2 },
+  '4:3': { label: 'Landscape 4:3', ratio: 4 / 3 },
+  '1:1': { label: 'Square 1:1', ratio: 1 },
+  '4:5': { label: 'Portrait 4:5', ratio: 4 / 5 },
+  '2:3': { label: 'Portrait 2:3', ratio: 2 / 3 },
+  '9:16': { label: 'Portrait 9:16', ratio: 9 / 16 },
+  custom: { label: 'Custom size in pixels' },
 };
 
 /** Resolutions as the length of the image's longer side in pixels. */
@@ -147,8 +203,8 @@ export const LEGACY_OUTPUT_SIZES = {
 };
 
 export const RENDER_DEVICES = {
-  gpu: { label: 'Grafikkarte' },
-  cpu: { label: 'CPU (sehr langsam)' },
+  gpu: { label: 'Graphics card' },
+  cpu: { label: 'CPU (very slow)' },
 };
 
 const listeners = new Set();
@@ -168,7 +224,7 @@ export function select(key) {
   emit('selection');
 }
 
-function clearRenders() {
+export function clearRenders() {
   for (const render of state.renders) {
     // Also stops a turntable series and anything still waiting in the queue.
     render.status = 'cancelled';
@@ -179,20 +235,26 @@ function clearRenders() {
   state.renders = [];
 }
 
-/** Replaces the model. Materials and views start empty; the caller restores saved ones. */
+/**
+ * Replaces the model. Materials, views and jobs start empty; the caller
+ * restores saved ones. Finished renderings belong to the project and stay.
+ */
 export function resetForModel(fileName, parts) {
-  clearRenders();
   state.fileName = fileName;
   state.parts = parts;
   state.materials = [];
   state.sections = [];
   state.sectionCap = defaultSectionCap();
   state.explode = defaultExplode();
+  state.upAxis = '+Z';
+  state.partOffsets = new Map();
   state.views = [];
+  state.jobs = [];
 }
 
 /** Empties everything that belongs to a project, before another one is loaded. */
 export function resetForProject(project) {
+  clearRenders();
   resetForModel(null, []);
   state.project = { id: project.id, name: project.name };
   state.scene = defaultScene();

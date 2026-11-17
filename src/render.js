@@ -252,7 +252,7 @@ const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
  * a readable name of what was actually picked.
  */
 async function requestDevice(kind) {
-  if (!navigator.gpu) throw new Error('Dieser Browser stellt kein WebGPU bereit.');
+  if (!navigator.gpu) throw new Error('This browser does not provide WebGPU.');
   const cpu = kind === 'cpu';
   const adapter = await navigator.gpu.requestAdapter({
     featureLevel: 'compatibility',
@@ -261,8 +261,8 @@ async function requestDevice(kind) {
   if (!adapter) {
     throw new Error(
       cpu
-        ? 'Dieser Browser bietet kein Rendern auf der CPU an. Bitte unter „Output“ die Grafikkarte wählen.'
-        : 'Es wurde keine Grafikkarte mit WebGPU gefunden.',
+        ? 'This browser does not offer rendering on the CPU. Please choose the graphics card under Output.'
+        : 'No graphics card with WebGPU was found.',
     );
   }
   const device = await adapter.requestDevice({ requiredFeatures: [...adapter.features] });
@@ -305,7 +305,7 @@ export async function startRender(viewer, options) {
   const renderer = new THREE.WebGPURenderer({ canvas, device, antialias: false, alpha: true, trackTimestamp: true });
   try {
     await renderer.init();
-    if (!renderer.backend.isWebGPUBackend) throw new Error('Dieser Browser stellt kein WebGPU bereit.');
+    if (!renderer.backend.isWebGPUBackend) throw new Error('This browser does not provide WebGPU.');
   } catch (error) {
     renderer.dispose();
     device.destroy();
@@ -400,8 +400,8 @@ export async function startRender(viewer, options) {
   renderer.onDeviceLost = (info) => {
     fail(
       new Error(
-        `Die Grafikkarte hat das Rendering abgebrochen (${info.message || 'Gerät verloren'}). ` +
-          'Eine kleinere Bildgröße oder der schonende Modus unter „Output“ können helfen.',
+        `The graphics card stopped the rendering (${info.message || 'device lost'}). ` +
+          'A smaller image size or the gentle mode under Output can help.',
       ),
     );
   };

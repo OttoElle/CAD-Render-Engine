@@ -1,12 +1,45 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CadControls } from './cad-controls.js';
 import { createMaterial, finishFrame, applyFinishTangents } from './materials.js';
 import { buildEnvironmentTexture, getLightPreset, CUSTOM_SHADOW } from './environment.js';
 import { buildCap } from './section.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { buildCoveGeometry, placeCove, gradientCss, floorMaterialParams, coveAlbedo, REFLECTION_F90_SCALE } from './backdrop.js';
 
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
+const HOVER_EMISSIVE = new THREE.Color(0x0e2d5c);
+
+/** Rotation of the model for each choice of up axis; CAD Z up is turned to the scene's Y up. */
+const UP_ROTATIONS = {
+  '+Z': [-Math.PI / 2, 0, 0],
+  '-Z': [Math.PI / 2, 0, 0],
+  '+Y': [0, 0, 0],
+  '-Y': [Math.PI, 0, 0],
+  '+X': [0, 0, Math.PI / 2],
+  '-X': [0, 0, -Math.PI / 2],
+};
+
+/** A letter that always faces the camera, for the axes of the coordinate system. */
+function axisLabel(text, color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext('2d');
+  context.font = '600 44px system-ui, sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillStyle = color;
+  context.fillText(text, 32, 34);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false, transparent: true, toneMapped: false }),
+  );
+  sprite.renderOrder = 1000;
+  sprite.raycast = () => {};
+  return sprite;
+}
 const BLACK = new THREE.Color(0x000000);
 
 const BACKGROUNDS = {
@@ -142,16 +175,18 @@ export class Viewer {
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.1, 1000);
     this.camera.position.set(1, 1, 1);
 
-    this.controls = new OrbitControls(this.camera, canvas);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.12;
+    this.controls = new CadControls(this.camera, canvas, {
+      pickPoint: (x, y) => this._pick(x, y)?.point ?? null,
+      pivotFallback: () => this.bounds.center.clone(),
+      // A press on the move gizmo moves the part, not the camera.
+      blocked: () => Boolean(this.gizmo?.object && this.gizmo.axis),
+    });
     // Only flags here: the roll is re-applied in _syncCamera before anyone looks at the camera.
     this.controls.addEventListener('change', () => {
       this._needsRender = true;
       this._viewChanged = true;
     });
 
-    /** Camera roll around the viewing axis in radians. Orbit controls always level the camera, so it is re-applied after each update. */
     this.roll = 0;
     /** Width in pixels on the left that floating UI covers; the view is centred in the rest. */
     this.inset = 0;
@@ -200,6 +235,41 @@ export class Viewer {
     helperFill.frustumCulled = false;
     this._sectionHelper.add(helperFill, helperOutline);
     this.modelRoot.add(this._sectionHelper);
+
+    // The CAD coordinate system: arrows along X, Y and Z from the origin, drawn on top of the model.
+    this.axesHelper = new THREE.Group();
+    this.axesHelper.visible = false;
+    const AXIS_COLORS = ['#e5484d', '#3fb950', '#4a6cf7'];
+    for (let i = 0; i < 3; i++) {
+      const direction = new THREE.Vector3().setComponent(i, 1);
+      const arrow = new THREE.ArrowHelper(direction, new THREE.Vector3(), 1, AXIS_COLORS[i], 0.12, 0.05);
+      for (const child of [arrow.line, arrow.cone]) {
+        child.material.depthTest = false;
+        child.material.toneMapped = false;
+        child.renderOrder = 999;
+        child.raycast = () => {};
+      }
+      const label = axisLabel('XYZ'[i], AXIS_COLORS[i]);
+      label.position.copy(direction).multiplyScalar(1.12);
+      label.scale.setScalar(0.12);
+      this.axesHelper.add(arrow, label);
+    }
+    this.modelRoot.add(this.axesHelper);
+
+    // Gizmo for moving a part with the mouse.
+    this.gizmo = new TransformControls(this.camera, canvas);
+    this.gizmo.setSpace('local');
+    this.gizmo.setSize(0.8);
+    this._gizmoProxy = new THREE.Object3D();
+    this.modelRoot.add(this._gizmoProxy);
+    this._gizmoHelper = this.gizmo.getHelper();
+    this.scene.add(this._gizmoHelper);
+    this.gizmo.addEventListener('change', () => this.requestRender());
+    this.gizmo.addEventListener('dragging-changed', (event) => {
+      this._gizmoDragging = event.value;
+      if (!event.value) this._gizmoEnd?.();
+    });
+    this.gizmo.addEventListener('objectChange', () => this._gizmoMove?.());
     this.edgesVisible = true;
     /** Called with the part id (or null) and the hit point when the user clicks in the viewport. */
     this.onPartClick = null;
@@ -215,10 +285,30 @@ export class Viewer {
     this._raycaster = new THREE.Raycaster();
     this._pointerDown = null;
 
+    /** Called with the part id under the pointer (or null) whenever it changes. */
+    this.onPartHover = null;
+    /** Whether parts light up under the pointer, where clicking them does something. */
+    this.hoverEnabled = false;
+    this._hovered = null;
+    this._hoverFrame = 0;
+
     canvas.addEventListener('pointerdown', (e) => {
       this._pointerDown = { x: e.clientX, y: e.clientY };
+      this._pointerDownOnGizmo = Boolean(this.gizmo.object && this.gizmo.axis);
     });
     canvas.addEventListener('pointerup', (e) => this._handleClick(e));
+    canvas.addEventListener('pointermove', (e) => {
+      if (e.buttons !== 0 || !this.hoverEnabled) return;
+      cancelAnimationFrame(this._hoverFrame);
+      this._hoverFrame = requestAnimationFrame(() => {
+        const hit = this.gizmo.axis ? null : this._pick(e.clientX, e.clientY);
+        this._setHovered(hit ? hit.object.userData.partId : null);
+      });
+    });
+    canvas.addEventListener('pointerleave', () => {
+      cancelAnimationFrame(this._hoverFrame);
+      this._setHovered(null);
+    });
 
     new ResizeObserver(() => this._resize()).observe(canvas.parentElement);
     this._resize();
@@ -228,6 +318,95 @@ export class Viewer {
 
   requestRender() {
     this._needsRender = true;
+  }
+
+  setHoverEnabled(enabled) {
+    this.hoverEnabled = enabled;
+    if (!enabled) this._setHovered(null);
+  }
+
+  _setHovered(id) {
+    if (id === this._hovered) return;
+    this._hovered = id;
+    this.canvas.classList.toggle('over-part', id !== null);
+    this._applyEmissive();
+    this.onPartHover?.(id);
+  }
+
+  // --- Coordinate system -----------------------------------------------------------
+
+  /** Turns the model so that the given CAD axis (see UP_AXES in state.js) points up. */
+  setUpAxis(axis) {
+    const rotation = UP_ROTATIONS[axis] || UP_ROTATIONS['+Z'];
+    const current = this.modelRoot.rotation.toArray().slice(0, 3);
+    if (current.every((value, i) => Math.abs(value - rotation[i]) < 1e-9)) return false;
+    this.modelRoot.rotation.set(...rotation);
+    this.modelRoot.updateMatrixWorld(true);
+    for (const part of this.parts) this._applyClipping(part);
+    this._updateBounds();
+    this._updateShadowSetup();
+    this._capsDirty = true;
+    this.requestRender();
+    return true;
+  }
+
+  /** A direction in the scene, in CAD coordinates. */
+  toCad(vector) {
+    return vector.clone().applyQuaternion(this.modelRoot.quaternion.clone().invert());
+  }
+
+  setAxesVisible(visible) {
+    this.axesHelper.visible = visible;
+    this._sizeAxes();
+    this.requestRender();
+  }
+
+  _sizeAxes() {
+    // Long enough to reach out of the model, which often sits away from the origin.
+    const box = this.modelBox;
+    const reach = box.isEmpty() ? 1 : Math.max(box.max.length(), box.min.length(), this.bounds.radius) * 0.6;
+    this.axesHelper.scale.setScalar(Math.max(reach, 1e-3));
+  }
+
+  /**
+   * Shows the move gizmo at a point in CAD coordinates. `onMove(delta)` gets
+   * the distance moved since the drag started, in CAD coordinates.
+   */
+  attachGizmo(point, onMove) {
+    this._gizmoProxy.position.fromArray(point);
+    this._gizmoStart = this._gizmoProxy.position.clone();
+    this._gizmoMove = () => onMove(this._gizmoProxy.position.clone().sub(this._gizmoStart).toArray());
+    this._gizmoEnd = () => {
+      this._gizmoStart = this._gizmoProxy.position.clone();
+      onMove(null);
+    };
+    this.gizmo.attach(this._gizmoProxy);
+    this.requestRender();
+  }
+
+  /** Moves the gizmo along when the part was moved some other way. */
+  placeGizmo(point) {
+    if (!this.gizmo.object || this._gizmoDragging) return;
+    this._gizmoProxy.position.fromArray(point);
+    this._gizmoStart = this._gizmoProxy.position.clone();
+    this.requestRender();
+  }
+
+  detachGizmo() {
+    if (!this.gizmo.object) return;
+    this.gizmo.detach();
+    this._gizmoMove = null;
+    this._gizmoEnd = null;
+    this.requestRender();
+  }
+
+  /** Camera roll around the viewing axis in radians. The controls level the camera, so it is re-applied after each update. */
+  get roll() {
+    return this.controls.roll;
+  }
+
+  set roll(value) {
+    this.controls.roll = value;
   }
 
   /** Runs the orbit controls and re-applies the roll they remove. */
@@ -272,8 +451,19 @@ export class Viewer {
    */
   captureThumbnail(width = 480, height = 300) {
     if (this.parts.length === 0) return null;
-    // The drawing buffer is only readable right after rendering.
+    // The drawing buffer is only readable right after rendering; helpers stay out of the picture.
+    const helpers = [this.axesHelper, this._gizmoHelper].map((object) => [object, object.visible]);
+    for (const [object] of helpers) object.visible = false;
+    const highlighted = this.highlighted;
+    const hovered = this._hovered;
+    this.highlighted = new Set();
+    this._hovered = null;
+    this._applyEmissive();
     this.renderer.render(this.scene, this.camera);
+    for (const [object, visible] of helpers) object.visible = visible;
+    this.highlighted = highlighted;
+    this._hovered = hovered;
+    this._applyEmissive();
     const region = this.getFreeRegion();
     const ratio = this.renderer.getPixelRatio();
     const canvas = document.createElement('canvas');
@@ -356,6 +546,7 @@ export class Viewer {
 
     this._updateBounds();
     this._updateShadowSetup();
+    this._sizeAxes();
 
     this.roll = 0;
     this.setView('iso');
@@ -826,8 +1017,14 @@ export class Viewer {
   /** Tints the given parts so the user can see which ones an entry refers to. */
   setHighlight(ids) {
     this.highlighted = new Set(ids);
+    this._applyEmissive();
+  }
+
+  _applyEmissive() {
     for (const part of this.parts) {
-      part.mesh.material.emissive.copy(this.highlighted.has(part.id) ? SELECT_EMISSIVE : BLACK);
+      part.mesh.material.emissive.copy(
+        this.highlighted.has(part.id) ? SELECT_EMISSIVE : part.id === this._hovered ? HOVER_EMISSIVE : BLACK,
+      );
     }
     this.requestRender();
   }
@@ -977,34 +1174,42 @@ export class Viewer {
   _handleClick(event) {
     const down = this._pointerDown;
     this._pointerDown = null;
+    if (this._pointerDownOnGizmo) return;
     // Ignore drags: only a click without movement selects a part.
     if (!down || Math.hypot(event.clientX - down.x, event.clientY - down.y) > 4) return;
     if (event.button !== 0 || this.parts.length === 0) return;
-
-    const rect = this.canvas.getBoundingClientRect();
-    const pointer = new THREE.Vector2(
-      ((event.clientX - rect.left) / rect.width) * 2 - 1,
-      -((event.clientY - rect.top) / rect.height) * 2 + 1,
-    );
-    this._syncCamera();
-    this.camera.updateMatrixWorld();
-    this._raycaster.setFromCamera(pointer, this.camera);
-    const visible = this.parts.filter((p) => p.mesh.visible).map((p) => p.mesh);
-    // The clipped-away half of a cut part is still in the mesh; skip hits there.
-    const hit = this._raycaster
-      .intersectObjects(visible, false)
-      .find((candidate) =>
-        this.parts[candidate.object.userData.partId].worldPlanes.every(
-          (plane) => plane.distanceToPoint(candidate.point) >= 0,
-        ),
-      );
+    const hit = this._pick(event.clientX, event.clientY);
     let normal = null;
     if (hit?.face) {
       // Parts are double sided, so the hit may be on the back of a face.
       normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
       if (normal.dot(this._raycaster.ray.direction) > 0) normal.negate();
     }
-    this.onPartClick?.(hit ? hit.object.userData.partId : null, hit ? hit.point.clone() : null, normal);
+    this.onPartClick?.(hit ? hit.object.userData.partId : null, hit ? hit.point.clone() : null, normal, event);
+  }
+
+  /** The visible, uncut surface of the model under a point of the window, or null. */
+  _pick(clientX, clientY) {
+    if (this.parts.length === 0) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const pointer = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this._syncCamera();
+    this.camera.updateMatrixWorld();
+    this._raycaster.setFromCamera(pointer, this.camera);
+    const visible = this.parts.filter((p) => p.mesh.visible).map((p) => p.mesh);
+    // The clipped-away half of a cut part is still in the mesh; skip hits there.
+    return (
+      this._raycaster
+        .intersectObjects(visible, false)
+        .find((candidate) =>
+          this.parts[candidate.object.userData.partId].worldPlanes.every(
+            (plane) => plane.distanceToPoint(candidate.point) >= 0,
+          ),
+        ) || null
+    );
   }
 
   _resize() {

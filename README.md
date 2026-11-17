@@ -26,88 +26,92 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
 - [x] **Schritt 12:** Projekte als Datei exportieren und importieren
 - [x] **Schritt 13:** Projektübersicht, aufgeräumte Menüs mit einklappbaren
   Gruppen, Seitenverhältnis und Auflösung getrennt, Kanten am Würfel
+- [x] **Schritt 14:** Oberfläche auf Englisch, Render-Jobs (Bild oder
+  Drehteller) für die Warteschlange, Übernehmen/Verwerfen in jedem Panel,
+  Bauteile im Viewport auswählen, Koordinatensystem mit verschiebbaren
+  Bauteilen und wählbarer Hochachse, Explosionsansicht pro Bauteil, gespeicherte
+  Renderings mit Galerie in der Übersicht und einfacher Bildbearbeitung,
+  CAD-Navigation ohne Anschlag
 
 ## Ablauf
 
-„Projekte“ oben links öffnet die Projektübersicht: alle Projekte als Kacheln
+Die Oberfläche der App ist englisch; die Begriffe unten stehen deshalb in
+Klammern so, wie sie in der App heißen.
+
+„Projects“ oben links öffnet die Projektübersicht: alle Projekte als Kacheln
 mit Vorschaubild, letzter Änderung und Inhalt, zum Öffnen, Anlegen,
-Importieren, Duplizieren, Exportieren und Löschen. Mit mehreren Projekten
-startet die App dort.
+Importieren, Duplizieren, Exportieren und Löschen. „New project“ fragt nach
+Namen und Vorlage, der Stift an einer Kachel (oder ein Klick auf den
+Projektnamen oben) ändert Namen und Vorlage später. Hat ein Projekt
+Renderings, öffnet der Knopf auf seinem Vorschaubild eine Galerie, in der
+sich die Bilder ansehen und herunterladen lassen, ohne das Projekt zu öffnen.
+Unter den Projekten lassen sich Vorlagen speichern und löschen. Eine Vorlage
+merkt sich Materialien, Szene, Licht, Objektiv und Output-Einstellungen ohne
+Modell. „Export“ speichert ein Projekt samt STEP-Modell und eigener HDRI als
+eine `.clearcoat`-Datei, „Import“ (oder die Datei ins Fenster ziehen) holt es
+auf einem anderen Rechner wieder herein. Mit mehreren Projekten startet die
+App in der Übersicht.
 
 Die schwebende Seitenleiste führt als Baum durch alle Schritte. Jeder Eintrag
-hat sinnvolle Standardwerte, sodass man direkt rendern kann. Ein Klick öffnet
-die Einstellungen daneben, das Plus legt einen neuen Untereintrag an. Seltener
-gebrauchte Einstellungen stehen in einklappbaren Gruppen.
+hat sinnvolle Standardwerte. Ein Klick öffnet die Einstellungen daneben, das
+Plus legt einen neuen Untereintrag an. Oben rechts im Panel übernimmt der
+Haken die Änderungen, das Kreuz verwirft alles, was seit dem Öffnen des Panels
+geändert wurde (ein gerade angelegter Eintrag verschwindet dann wieder).
 
-1. **Projekt:** Ein Projekt ist ein Rendering-Auftrag mit Namen. Es merkt sich
-   Modell, Materialien, Szene, Licht, Kamera, Ansichten und Output und öffnet
-   sich beim nächsten Start wieder vollständig. „Exportieren“ speichert ein Projekt samt
-   STEP-Modell und eigener HDRI als eine `.clearcoat`-Datei, „Importieren“
-   (oder die Datei ins Fenster ziehen) holt es auf einem anderen Rechner
-   wieder herein. Kommt ein Projekt zurück, das es dort schon gibt, fragt die
-   App, ob es ersetzt oder als Kopie angelegt wird. Eine **Vorlage** speichert
-   die Einstellungen ohne Modell, um sie in anderen Projekten wieder
-   anzuwenden.
-2. **Geometrie:** STEP-Datei öffnen (Plus oder Drag-and-drop). Die Bauteile
-   stehen als aufklappbare Liste darunter, das Auge blendet sie ein und aus.
-   Ein Klick auf ein Bauteil, im Baum oder im Modell, öffnet es mit Sichtbarkeit
-   und Material.
-3. **Schnitte:** Das Plus legt eine Schnittebene an, senkrecht zu einer Achse
-   und per Regler verschiebbar. Die Schnittflächen werden geschlossen, wahlweise
-   im Material des Bauteils oder in einer eigenen Farbe. Einzelne Bauteile,
-   etwa Schrauben oder Wellen, lassen sich vom Schnitt ausnehmen. Schnitte
-   gelten in der Ansicht und im fertigen Rendering.
-4. **Materialien:** Das Plus legt ein Material an. Bauteile werden in der Liste
-   angehakt oder direkt im Modell angeklickt. Gleiche Bauteile, etwa alle
-   Schrauben einer Größe, werden auf Wunsch gemeinsam zugewiesen. Bauteile
-   ohne Material behalten ihre CAD-Farbe. Die Bibliothek ist nach Metall,
-   Kunststoff, Lack und Glas gegliedert. Regler für Rauheit, Metallisch und
-   Klarlack passen jedes Material an. Gebürstete und gedrehte Oberflächen
-   verziehen die Spiegelungen quer zu den Riefen. Die Schliffrichtung oder
-   Drehachse ergibt sich automatisch aus der Form des Bauteils oder wird als
-   Achse gewählt.
-5. **Szene:** Hintergrund als Farbe oder Farbverlauf (von oben nach unten oder
-   von der Mitte nach außen). Der Boden zeigt nur Schatten und geht nahtlos in
-   den Hintergrund über, auch beim Farbverlauf. Er kann spiegeln, etwa wie
-   schwarzes Acrylglas. Alternativ steht das Modell in einer Hohlkehle, die
-   wie im Fotostudio hinter dem Modell nach oben läuft und sich mit der
-   Kamera dreht.
-6. **Beleuchtung:** Lichtvorlage (fünf Studio-Aufbauten, Tageslicht, bewölkter
-   Himmel, Werkhalle) oder eigene HDRI-Datei (.hdr, .exr), Drehung und
-   Belichtung in Blendenstufen. Eine HDRI-Datei lässt sich auch einfach ins
-   Fenster ziehen. Die Softboxen einer Vorlage stehen als Einträge darunter
-   und lassen sich einzeln verschieben, vergrößern, färben, dimmen und
-   ausschalten. Das Plus legt weitere an, auch über einer HDRI-Datei.
-   „Glanzlicht setzen“ richtet eine Softbox so aus, dass ihr Glanzlicht genau
-   auf dem angeklickten Punkt des Modells liegt.
-7. **Perspektive:** Brennweite oder Parallelprojektion, „Kamera in Zahlen“
-   (Drehung, Höhe, Rollen, Abstand, Drehpunkt) und Tiefenunschärfe mit Blende
-   und wählbarem Fokuspunkt. Bei Baugruppen zieht die Explosionsansicht die
-   Bauteile auseinander, von der Mitte aus oder entlang einer Achse; Schnitte
-   wandern mit den Bauteilen mit. Das Plus speichert die aktuelle Ansicht
-   samt Explosionsabstand.
-8. **Output:** Seitenverhältnis und Auflösung (längere Bildseite) getrennt
-   oder eine eigene Größe in Pixeln, Samples und Entrauschen, Dateiformat (PNG
-   oder JPG) und transparenter Hintergrund, unter „Rechner“ das Rendergerät
-   (Grafikkarte oder CPU) und der schonende Modus für Laptops. Solange dieser
-   Schritt offen ist, zeigt ein Rahmen in der Ansicht genau den Bildausschnitt.
-9. **Renderings:** „Rendering starten“ oder das Plus startet ein Rendering,
-   „Alle Ansichten rendern“ stellt jede gespeicherte Ansicht in die
-   Warteschlange, „Drehteller rendern“ dreht das Modell einmal um die
-   senkrechte Achse (24 bis 120 Bilder; Kamera und Licht bleiben stehen).
-   Läuft schon eines, wartet
-   das neue in der Warteschlange; Kamera und Output-Einstellungen gelten so,
-   wie sie beim Einreihen waren, Material und Licht so, wie sie beim Start
-   sind. Fertige Bilder bleiben als Einträge stehen und lassen sich einzeln
-   oder alle zusammen als ZIP speichern. Ein Drehteller lässt sich in der App
-   abspielen und als Video (MP4, sonst WebM; eine Umdrehung in 6 Sekunden)
-   oder als nummerierte Einzelbilder speichern.
+1. **Geometrie (Geometry):** STEP-Datei öffnen (Plus oder Drag-and-drop).
+   Darunter stehen die Bauteile (Parts) und die Schnitte (Sections). Bauteile
+   lassen sich im Baum oder direkt im Modell anklicken; unter dem Mauszeiger
+   leuchten sie auf. Im Bauteil-Panel stehen Sichtbarkeit, Material, die
+   Position als Versatz in X, Y, Z (auch mit Pfeilen im Viewport
+   verschiebbar) und eigene Einstellungen für die Explosionsansicht. Unter
+   „Coordinate system“ wird gewählt, welche CAD-Achse nach oben zeigt, und
+   die Achsen lassen sich einblenden (auch über „Axes“ oder `A`).
+   Schnitte: das Plus legt eine Schnittebene an, senkrecht zu einer Achse und
+   per Regler verschiebbar. Die Schnittflächen werden geschlossen, im Material
+   des Bauteils oder in eigener Farbe. Ein Klick auf ein Bauteil im Modell
+   nimmt es vom Schnitt aus oder schneidet es wieder.
+2. **Materialien (Materials):** Das Plus legt ein Material an. Bauteile
+   werden im Modell angeklickt oder in der Liste angehakt; die zugewiesenen
+   stehen als Auswahl-Box mit Entfernen-Knopf da, „Clear list“ leert sie.
+   Gleiche Bauteile werden auf Wunsch gemeinsam zugewiesen. Regler für
+   Rauheit, Metallisch und Klarlack sowie gebürstete und gedrehte Oberflächen
+   passen jedes Material an; „Reset to defaults“ setzt Farbe und Regler
+   jederzeit auf die Werte der Bibliothek zurück.
+3. **Szene (Scene):** Zuerst die Wahl des Hintergrunds: Farbe (hell, weiß,
+   grau, dunkel, eigene Farbe oder Farbverlauf) oder Szene (die
+   Lichtumgebung bzw. eine HDRI als Hintergrund). Bei einer Farbe folgt die
+   Bodenform (flacher Boden, Hohlkehle oder kein Boden), danach Stärke und
+   Unschärfe der Spiegelung im Boden.
+4. **Beleuchtung (Lighting):** Lichtvorlage oder eigene HDRI-Datei, Drehung
+   und Belichtung in Blendenstufen. Die Softboxen stehen als Einträge
+   darunter und lassen sich einzeln verschieben, vergrößern, färben, dimmen
+   und ausschalten. „Place highlight“ legt das Glanzlicht einer Softbox auf
+   den angeklickten Punkt.
+5. **Kamera (Camera):** Brennweite oder Parallelprojektion, Kamera in Zahlen,
+   Tiefenunschärfe und die Explosionsansicht (Abstand, Richtung und ein
+   Bauteil als Zentrum). Das Plus speichert die aktuelle Ansicht.
+6. **Output:** Hier entstehen Render-Jobs. Ein Job ist ein Bild oder ein
+   Drehteller und merkt sich Kamera, Explosionsabstand, Seitenverhältnis,
+   Auflösung, Qualität, Dateiformat und Transparenz. Solange ein Job offen
+   ist, nimmt er die Kamera mit, und ein Rahmen zeigt den Bildausschnitt.
+   Beliebig viele Jobs anlegen (auch einer pro gespeicherter Ansicht), dann
+   „Render all jobs“: alle wandern in die Warteschlange. Der Drehteller dreht
+   das Modell einmal um die senkrechte Achse (24 bis 120 Bilder, eine Umdrehung
+   in 4 bis 12 Sekunden); den Blickwinkel bestimmt die Kamerahöhe. Unter
+   „Rendering device“ stehen Grafikkarte oder CPU und der schonende Modus.
+7. **Renderings (Renders):** Fertige Bilder bleiben mit dem Projekt
+   gespeichert, auch nach einem Neustart. Im Bildbetrachter lassen sich
+   Helligkeit, Kontrast, Sättigung, Wärme und Vignette einstellen; das gilt
+   beim Speichern auch für die Einzelbilder und das Video eines Drehtellers.
+   Bilder einzeln als PNG oder JPG, alle zusammen als ZIP, Drehteller als
+   Video (MP4, sonst WebM) oder Bildserie.
 
 Projekte und Vorlagen liegen im Speicher des Browsers (Einstellungen im
-localStorage, STEP- und HDRI-Dateien in IndexedDB). Sie gelten also pro
-Browser und Rechner; zwischen Rechnern wandern sie als Projektdatei. Eine
-`.clearcoat`-Datei ist ein ZIP-Archiv mit `project.json`, dem Modell und der
-HDRI.
+localStorage, STEP- und HDRI-Dateien sowie fertige Renderings in IndexedDB).
+Sie gelten also pro Browser und Rechner; zwischen Rechnern wandern sie als
+Projektdatei. Eine `.clearcoat`-Datei ist ein ZIP-Archiv mit `project.json`,
+dem Modell und der HDRI; Renderings bleiben auf dem Rechner, auf dem sie
+entstanden sind.
 
 Das Rendern braucht einen Browser mit WebGPU, also ein aktuelles Chrome oder
 Edge. Die Echtzeit-Ansicht läuft in jedem aktuellen Browser. Das Rendern auf
@@ -138,15 +142,16 @@ Testmodell liegt unter `samples/Bracket.step`.
 
 | Aktion | Eingabe |
 | --- | --- |
-| Drehen | Linke Maustaste ziehen |
-| Verschieben | Rechte Maustaste ziehen |
-| Zoomen | Mausrad |
+| Drehen (um den Punkt unter der Maus, ohne Anschlag) | Linke Maustaste ziehen |
+| Verschieben | Rechte oder mittlere Maustaste ziehen, oder Shift + linke Maustaste |
+| Zoomen (zum Mauszeiger hin) | Mausrad |
 | Standardansichten | Flächen, Kanten und Ecken des Würfels unten rechts anklicken |
 | In 15°-Schritten drehen | Pfeile am Würfel |
 | In 15°-Schritten rollen | Runde Pfeile am Würfel |
 | Zurück zur Standardansicht | Haus am Würfel |
 | Modell einpassen | `F` |
 | Kanten ein- und ausblenden | `E` |
+| Koordinatensystem ein- und ausblenden | `A` |
 
 ## Aufbau
 
@@ -155,11 +160,13 @@ Testmodell liegt unter `samples/Bracket.step`.
   Worker und berechnet die CAD-Kanten aus den Flächengrenzen.
 - `src/step-loader.js` wandelt das Ergebnis in three.js-Geometrie um, ein Mesh
   pro Bauteil.
-- `src/viewer.js` ist die Echtzeit-Ansicht (WebGL) mit Kamera, Boden und
-  Bildausschnitt, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.
+- `src/viewer.js` ist die Echtzeit-Ansicht (WebGL) mit Kamera, Boden,
+  Bildausschnitt, Achsen und Verschiebe-Pfeilen, `src/cad-controls.js` die
+  Maussteuerung, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.
 - `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen.
 - `src/backdrop.js` baut Boden, Hohlkehle und Farbverläufe für Ansicht und Rendering.
 - `src/explode.js` berechnet die Verschiebungen der Explosionsansicht.
+- `src/adjust.js` enthält die Bildbearbeitung für fertige Renderings.
 - `src/export.js` speichert Bilder als PNG oder JPG, packt und liest
   ZIP-Archive und nimmt Drehteller-Videos auf, ohne zusätzliche Bibliotheken.
 - `src/materials.js` enthält die Materialbibliothek und die Schliffbilder,
