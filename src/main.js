@@ -28,6 +28,7 @@ import {
 } from './persistence.js';
 import { sectionToPlane } from './section.js';
 import { sceneGradient } from './backdrop.js';
+import { explodeOffsets } from './explode.js';
 import { renderTree, setCollapsed } from './tree.js';
 import { renderPanel, identicalParts } from './panels.js';
 import { h } from './dom.js';
@@ -123,6 +124,20 @@ function applySceneAndLighting() {
     reflection: state.scene.reflection,
     reflectionBlur: state.scene.reflectionBlur,
   });
+}
+
+/** Moves the parts apart for an exploded view, or back together. */
+function applyExplode() {
+  viewer.setPartOffsets(explodeOffsets(state.parts, state.explode));
+}
+
+/** Shows a saved view, including how far the assembly was exploded. */
+function showView(view) {
+  viewer.applyViewState(view);
+  if (view.explode) {
+    state.explode = { ...view.explode };
+    applyExplode();
+  }
 }
 
 /** Hands the active section cuts to the 3D view and outlines the one being edited. */
@@ -631,9 +646,15 @@ const actions = {
     const entry = addMaterial();
     select(`material:${entry.id}`);
   },
+  showView,
   addView: () => {
     if (state.parts.length === 0) return;
-    const view = { id: newId(), name: `Ansicht ${state.views.length + 1}`, ...viewer.getViewState() };
+    const view = {
+      id: newId(),
+      name: `Ansicht ${state.views.length + 1}`,
+      ...viewer.getViewState(),
+      explode: { ...state.explode },
+    };
     state.views.push(view);
     select(`view:${view.id}`);
   },
@@ -691,6 +712,7 @@ function refresh(what) {
   const area = what.replace(':live', '');
 
   if (area === 'model' || area === 'materials') applyMaterials();
+  if (area === 'model' || area === 'explode') applyExplode();
   if (area === 'model' || area === 'scene' || area === 'lighting') applySceneAndLighting();
   if (area === 'model' || area === 'sections' || what === 'selection') applySections();
 
@@ -701,7 +723,7 @@ function refresh(what) {
     const [kind, idText] = state.selected.split(':');
     if (kind === 'view') {
       const view = state.views.find((item) => item.id === Number(idText));
-      if (view) viewer.applyViewState(view);
+      if (view) showView(view);
     }
   }
   if (!live) viewer.setHighlight(selectionHighlight());

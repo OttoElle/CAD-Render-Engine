@@ -20,6 +20,7 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
   Oberflächen und erweiterter Bibliothek
 - [x] **Schritt 8:** Einzelne Softboxen, weitere Lichtvorlagen und Belichtung
 - [x] **Schritt 9:** Farbverläufe, Hohlkehle und spiegelnder Boden
+- [x] **Schritt 10:** Explosionsansicht für Baugruppen
 
 ## Ablauf
 
@@ -66,7 +67,10 @@ die Einstellungen daneben, das Plus legt einen neuen Untereintrag an.
    auf dem angeklickten Punkt des Modells liegt.
 7. **Perspektive:** Brennweite oder Parallelprojektion, Kamera in Zahlen
    (Drehung, Höhe, Rollen, Abstand, Drehpunkt) und Tiefenunschärfe mit Blende
-   und wählbarem Fokuspunkt. Das Plus speichert die aktuelle Ansicht.
+   und wählbarem Fokuspunkt. Bei Baugruppen zieht die Explosionsansicht die
+   Bauteile auseinander, von der Mitte aus oder entlang einer Achse; Schnitte
+   wandern mit den Bauteilen mit. Das Plus speichert die aktuelle Ansicht
+   samt Explosionsabstand.
 8. **Output:** Bildgröße, Qualität, transparenter Hintergrund, Entrauschen und
    das Rendergerät (Grafikkarte oder CPU). Ein Rahmen in der Ansicht zeigt
    genau den Bildausschnitt, der gerendert wird. Der schonende Modus hilft auf
@@ -128,6 +132,7 @@ Testmodell liegt unter `samples/Bracket.step`.
   Bildausschnitt, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.
 - `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen.
 - `src/backdrop.js` baut Boden, Hohlkehle und Farbverläufe für Ansicht und Rendering.
+- `src/explode.js` berechnet die Verschiebungen der Explosionsansicht.
 - `src/materials.js` enthält die Materialbibliothek und die Schliffbilder,
   `src/environment.js` erzeugt die Lichtvorlagen und Softboxen als
   HDR-Umgebung direkt im Code.

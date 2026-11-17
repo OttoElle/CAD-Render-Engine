@@ -317,17 +317,47 @@ export class Viewer {
       this.modelRoot.add(part.mesh);
     }
 
-    this.modelRoot.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(this.modelRoot);
-    box.getBoundingSphere(this.bounds);
-    if (!(this.bounds.radius > 0)) this.bounds.set(new THREE.Vector3(), 1);
-    this._groundY = Number.isFinite(box.min.y) ? box.min.y : 0;
-    this.cove.geometry.dispose();
-    this.cove.geometry = parts.length > 0 ? buildCoveGeometry(this.bounds.radius) : new THREE.BufferGeometry();
+    this._updateBounds();
     this._updateShadowSetup();
 
     this.roll = 0;
     this.setView('iso');
+  }
+
+  /**
+   * Moves parts away from their place for an exploded view. `offsets` maps
+   * part ids to offsets [x, y, z] in CAD coordinates; parts not in it go back.
+   */
+  setPartOffsets(offsets) {
+    for (const part of this.parts) {
+      const offset = offsets.get(part.id);
+      if (offset) part.mesh.position.fromArray(offset);
+      else part.mesh.position.set(0, 0, 0);
+      this._applyClipping(part);
+    }
+    this._updateBounds();
+    this._updateShadowSetup();
+    this.requestRender();
+  }
+
+  /** Bounding sphere and floor height of the model as it stands, including an explosion. */
+  _updateBounds() {
+    this.modelRoot.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    const partBox = new THREE.Box3();
+    for (const part of this.parts) {
+      box.union(partBox.copy(part.mesh.geometry.boundingBox).applyMatrix4(part.mesh.matrixWorld));
+    }
+    box.getBoundingSphere(this.bounds);
+    if (!(this.bounds.radius > 0)) this.bounds.set(new THREE.Vector3(), 1);
+    this._groundY = Number.isFinite(box.min.y) ? box.min.y : 0;
+    // The cove is sized to the model; rebuild it when the model grows or shrinks noticeably.
+    const coveRadius = this.cove.userData.radius;
+    if (!coveRadius || Math.abs(this.bounds.radius - coveRadius) > coveRadius * 0.02 || this.parts.length === 0) {
+      this.cove.geometry.dispose();
+      this.cove.geometry = this.parts.length > 0 ? buildCoveGeometry(this.bounds.radius) : new THREE.BufferGeometry();
+      this.cove.userData.radius = this.parts.length > 0 ? this.bounds.radius : null;
+    }
   }
 
   /** Looks at the model from a named direction and fits it into the viewport. */
@@ -651,7 +681,10 @@ export class Viewer {
 
   _applyClipping(part) {
     const matrix = this.modelRoot.matrixWorld;
-    part.worldPlanes = this.sectionPlanesFor(part).map((plane) => plane.clone().applyMatrix4(matrix));
+    // Cuts belong to the part, so they move along with it in an exploded view.
+    part.worldPlanes = this.sectionPlanesFor(part).map((plane) =>
+      plane.clone().translate(part.mesh.position).applyMatrix4(matrix),
+    );
     const planes = part.worldPlanes.length > 0 ? part.worldPlanes : null;
     for (const material of [part.mesh.material, part.edges?.material, part.capMaterial]) {
       if (!material) continue;

@@ -1,5 +1,6 @@
 import { getMaterialDef, defaultTuning } from './materials.js';
 import { getLightPreset, presetLights } from './environment.js';
+import { defaultExplode } from './explode.js';
 
 let nextId = 1;
 
@@ -87,7 +88,9 @@ export const state = {
   lighting: defaultLighting(),
   /** Lens settings that only show in the final rendering. `focusPoint` is a world position or null (pivot). */
   camera: defaultCamera(),
-  /** Saved views: { id, name, position, target, fov, roll }. */
+  /** Exploded view: `amount` (0 = assembled, 1 = distances doubled) and `direction` (see EXPLODE_DIRECTIONS). */
+  explode: defaultExplode(),
+  /** Saved views: { id, name, position, target, fov, roll, explode }. */
   views: [],
   output: defaultOutput(),
   /** Renderings: { id, name, status, progress, samples, width, height, blob, url, handle, seconds }. */
@@ -150,6 +153,7 @@ export function resetForModel(fileName, parts) {
   state.materials = [];
   state.sections = [];
   state.sectionCap = defaultSectionCap();
+  state.explode = defaultExplode();
   state.views = [];
 }
 

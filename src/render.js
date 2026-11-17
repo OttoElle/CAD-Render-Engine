@@ -42,8 +42,14 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
     const sides = planes.map((plane) => boxSide(source.boundingBox, plane));
     if (sides.includes(-1)) continue; // cut away completely
     const cutting = planes.filter((plane, i) => sides[i] === 0);
+    // An exploded view moves the part, cut faces included.
+    const add = (mesh) => {
+      mesh.position.copy(part.mesh.position);
+      root.add(mesh);
+      return mesh;
+    };
     if (cutting.length === 0) {
-      root.add(new THREE.Mesh(source, material));
+      add(new THREE.Mesh(source, material));
       continue;
     }
 
@@ -54,7 +60,7 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
     finish?.(geometry);
     const own = (mesh) => {
       mesh.userData.ownGeometry = true;
-      root.add(mesh);
+      add(mesh);
     };
     own(new THREE.Mesh(geometry, material));
 

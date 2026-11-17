@@ -25,6 +25,7 @@ import {
   isDefaultTuning,
 } from './materials.js';
 import { LIGHT_PRESETS, MAX_LIGHT_SIZE, getLightPreset, presetLights } from './environment.js';
+import { EXPLODE_DIRECTIONS } from './explode.js';
 
 const numberFormat = new Intl.NumberFormat('de-DE');
 const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
@@ -1052,6 +1053,7 @@ function viewsPanel({ viewer, actions }) {
             ),
           ]
         : null,
+      ...explodeControls(),
       h('button', { class: 'primary', onclick: actions.addView }, 'Ansicht speichern'),
     ],
     live: () => {
@@ -1065,7 +1067,40 @@ function viewsPanel({ viewer, actions }) {
   };
 }
 
-function viewPanel(view, { viewer }) {
+/** Exploded view: how far apart the parts move, and in which direction. */
+function explodeControls() {
+  if (state.parts.length < 2) return [];
+  const { explode } = state;
+  return [
+    h('h3', { title: 'Zieht die Bauteile einer Baugruppe auseinander, um ihren Aufbau zu zeigen' }, 'Explosionsansicht'),
+    slider('Abstand', {
+      min: 0,
+      max: 150,
+      step: 1,
+      value: Math.round(explode.amount * 100),
+      format: (value) => (value === 0 ? 'zusammengebaut' : `${value} %`),
+      title: 'Wie weit die Bauteile auseinanderrücken: 100 % verdoppelt ihren Abstand zur Mitte der Baugruppe',
+      oninput: (value) => {
+        explode.amount = value / 100;
+        emit('explode:live');
+      },
+      onchange: () => emit('explode'),
+    }),
+    field(
+      'Richtung',
+      selectControl(
+        Object.entries(EXPLODE_DIRECTIONS),
+        explode.direction,
+        (value) => {
+          explode.direction = value;
+          emit('explode');
+        },
+      ),
+    ),
+  ];
+}
+
+function viewPanel(view, { viewer, actions }) {
   return {
     title: 'Gespeicherte Ansicht',
     body: [
@@ -1080,12 +1115,12 @@ function viewPanel(view, { viewer }) {
           },
         }),
       ),
-      h('button', { onclick: () => viewer.applyViewState(view) }, 'Anzeigen'),
+      h('button', { onclick: () => actions.showView(view) }, 'Anzeigen'),
       h(
         'button',
         {
           onclick: () => {
-            Object.assign(view, viewer.getViewState());
+            Object.assign(view, viewer.getViewState(), { explode: { ...state.explode } });
             emit('views');
           },
         },

@@ -13,6 +13,7 @@ import {
   FLOORS,
 } from './state.js';
 import { getMaterialDef, sanitizeTuning } from './materials.js';
+import { defaultExplode, EXPLODE_DIRECTIONS } from './explode.js';
 import { getLightPreset, presetLights, sanitizeLight } from './environment.js';
 
 /**
@@ -108,6 +109,13 @@ export const files = {
 
 // --- Snapshots ----------------------------------------------------------------
 
+function sanitizeExplode(saved) {
+  const explode = mergeTyped(defaultExplode(), saved);
+  if (!EXPLODE_DIRECTIONS[explode.direction]) explode.direction = 'radial';
+  explode.amount = Math.min(Math.max(Number(explode.amount) || 0, 0), 3);
+  return explode;
+}
+
 /** Copies `saved` over `defaults`, ignoring unknown keys and values of the wrong type. */
 function mergeTyped(defaults, saved) {
   const result = { ...defaults };
@@ -139,7 +147,15 @@ function modelSnapshot() {
       tuning: { ...entry.tuning },
       partIds: [...entry.partIds],
     })),
-    views: state.views.map(({ name, position, target, fov, roll }) => ({ name, position, target, fov, roll })),
+    views: state.views.map(({ name, position, target, fov, roll, explode }) => ({
+      name,
+      position,
+      target,
+      fov,
+      roll,
+      explode: { ...explode },
+    })),
+    explode: { ...state.explode },
     sections: state.sections.map(({ name, axis, position, flip, enabled, uncut }) => ({
       name,
       axis,
@@ -206,7 +222,8 @@ export function applyModelData(record) {
   if (!record || record.fileName !== state.fileName || record.partCount !== state.parts.length) return null;
   const valid = (id) => Number.isInteger(id) && id >= 0 && id < state.parts.length;
   state.materials = (record.materials || []).map((entry) => restoreEntry(entry, (entry.partIds || []).filter(valid)));
-  state.views = (record.views || []).map((view) => ({ id: newId(), ...view }));
+  state.views = (record.views || []).map((view) => ({ id: newId(), ...view, explode: sanitizeExplode(view.explode) }));
+  state.explode = sanitizeExplode(record.explode);
   state.sections = (record.sections || [])
     .filter((section) => [0, 1, 2].includes(section.axis) && Number.isFinite(section.position))
     .map((section) => ({
