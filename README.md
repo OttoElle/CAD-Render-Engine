@@ -32,6 +32,9 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
   Bauteilen und wählbarer Hochachse, Explosionsansicht pro Bauteil, gespeicherte
   Renderings mit Galerie in der Übersicht und einfacher Bildbearbeitung,
   CAD-Navigation ohne Anschlag
+- [x] **Schritt 15:** Bauteile drehen (Zahlen und Drehringe im Viewport),
+  Hilfslinien über dem Bildausschnitt, Rendern läuft im Hintergrund-Tab weiter,
+  englische Namen auch in älteren Projekten
 
 ## Ablauf
 
@@ -61,9 +64,13 @@ geändert wurde (ein gerade angelegter Eintrag verschwindet dann wieder).
 1. **Geometrie (Geometry):** STEP-Datei öffnen (Plus oder Drag-and-drop).
    Darunter stehen die Bauteile (Parts) und die Schnitte (Sections). Bauteile
    lassen sich im Baum oder direkt im Modell anklicken; unter dem Mauszeiger
-   leuchten sie auf. Im Bauteil-Panel stehen Sichtbarkeit, Material, die
-   Position als Versatz in X, Y, Z (auch mit Pfeilen im Viewport
-   verschiebbar) und eigene Einstellungen für die Explosionsansicht. Unter
+   leuchten sie auf. Im Bauteil-Panel stehen Sichtbarkeit, Material,
+   Position und Drehung („Position and rotation“: Versatz in X, Y, Z und
+   Winkel um die CAD-Achsen, gedreht um die Mitte des Bauteils; mit „Move“
+   und „Rotate“ auch per Pfeilen und Ringen im Viewport) und eigene
+   Einstellungen für die Explosionsansicht. Schnitte gehen durch die
+   Baugruppe, wie sie ausgerichtet ist; verschobene und gedrehte Bauteile
+   werden in derselben Ebene geschnitten wie alle anderen. Unter
    „Coordinate system“ wird gewählt, welche CAD-Achse nach oben zeigt, und
    die Achsen lassen sich einblenden (auch über „Axes“ oder `A`).
    Schnitte: das Plus legt eine Schnittebene an, senkrecht zu einer Achse und
@@ -94,6 +101,9 @@ geändert wurde (ein gerade angelegter Eintrag verschwindet dann wieder).
    Drehteller und merkt sich Kamera, Explosionsabstand, Seitenverhältnis,
    Auflösung, Qualität, Dateiformat und Transparenz. Solange ein Job offen
    ist, nimmt er die Kamera mit, und ein Rahmen zeigt den Bildausschnitt.
+   „Guides“ oben (oder `G`) blendet Hilfslinien über dem Bildausschnitt ein:
+   Drittel, Goldener Schnitt, Raster oder Mitte und Diagonalen; die Art wird
+   im Job- und im Kamera-Panel gewählt. Die Linien erscheinen nicht im Bild.
    Beliebig viele Jobs anlegen (auch einer pro gespeicherter Ansicht), dann
    „Render all jobs“: alle wandern in die Warteschlange. Der Drehteller dreht
    das Modell einmal um die senkrechte Achse (24 bis 120 Bilder, eine Umdrehung
@@ -114,7 +124,10 @@ dem Modell und der HDRI; Renderings bleiben auf dem Rechner, auf dem sie
 entstanden sind.
 
 Das Rendern braucht einen Browser mit WebGPU, also ein aktuelles Chrome oder
-Edge. Die Echtzeit-Ansicht läuft in jedem aktuellen Browser. Das Rendern auf
+Edge. Es läuft weiter, wenn der Tab im Hintergrund liegt oder das Fenster
+minimiert ist. Den Energiesparmodus und das Speichersparen von Chrome
+(„Leistung“ in den Einstellungen) kann das nicht überstimmen; dort lässt sich
+`localhost` unter „Diese Websites immer aktiv lassen“ eintragen. Die Echtzeit-Ansicht läuft in jedem aktuellen Browser. Das Rendern auf
 der CPU nutzt die Software-Umsetzung des Browsers und ist um ein Vielfaches
 langsamer als eine Grafikkarte.
 
@@ -152,6 +165,7 @@ Testmodell liegt unter `samples/Bracket.step`.
 | Modell einpassen | `F` |
 | Kanten ein- und ausblenden | `E` |
 | Koordinatensystem ein- und ausblenden | `A` |
+| Hilfslinien ein- und ausblenden | `G` |
 
 ## Aufbau
 
@@ -166,7 +180,8 @@ Testmodell liegt unter `samples/Bracket.step`.
 - `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen.
 - `src/backdrop.js` baut Boden, Hohlkehle und Farbverläufe für Ansicht und Rendering.
 - `src/explode.js` berechnet die Verschiebungen der Explosionsansicht.
-- `src/adjust.js` enthält die Bildbearbeitung für fertige Renderings.
+- `src/adjust.js` enthält die Bildbearbeitung für fertige Renderings,
+  `src/guides.js` die Hilfslinien über dem Bildausschnitt.
 - `src/export.js` speichert Bilder als PNG oder JPG, packt und liest
   ZIP-Archive und nimmt Drehteller-Videos auf, ohne zusätzliche Bibliotheken.
 - `src/materials.js` enthält die Materialbibliothek und die Schliffbilder,
@@ -174,7 +189,8 @@ Testmodell liegt unter `samples/Bracket.step`.
   HDR-Umgebung direkt im Code.
 - `src/render.js` rendert das Endbild mit
   [three-gpu-pathtracer](https://github.com/gkjohnson/three-gpu-pathtracer)
-  auf WebGPU in einer eigenen, unsichtbaren Zeichenfläche.
+  auf WebGPU in einer eigenen, unsichtbaren Zeichenfläche; `src/background.js`
+  hält es in einem Hintergrund-Tab am Laufen.
   Das Entrauschen übernimmt Open Image Denoise, das Modell dazu liegt unter
   `public/oidn/`.
 - `src/persistence.js` speichert Projekte und Vorlagen im Browser,

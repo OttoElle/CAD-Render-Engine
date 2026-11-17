@@ -48,7 +48,7 @@ export async function unpackProject(file) {
   }
   if (manifest?.format !== FORMAT || !manifest.project || typeof manifest.project !== 'object') throw invalid();
   if (manifest.version > VERSION) {
-    throw new Error('Die Projektdatei stammt aus einer neueren Version von Clearcoat. Bitte die App aktualisieren.');
+    throw new Error('This project file comes from a newer version of Clearcoat. Please update the app.');
   }
   const record = manifest.project;
   const asFile = (path, name) =>

@@ -69,7 +69,7 @@ export class ViewCube {
         for (const z of [-1, 1]) {
           const node = el('button', 'viewcube-corner', this.cube);
           node.type = 'button';
-          node.title = 'Isometrische Ansicht';
+          node.title = 'Isometric view';
           node.style.transform = `translate3d(${x * HALF}px, ${-y * HALF}px, ${z * HALF}px)`;
           node.addEventListener('click', () => viewer.lookFrom(new THREE.Vector3(x, y, z)));
         }

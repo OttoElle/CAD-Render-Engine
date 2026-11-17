@@ -110,6 +110,12 @@ const VIEW_DIRECTIONS = {
  * Real-time viewport used to position the model and camera.
  * Renders only when something changed, so an idle app costs no GPU time.
  */
+/** Whether two placement matrices (or nulls) are the same. */
+function sameMatrix(a, b) {
+  if (!a || !b) return a === b;
+  return a.equals(b);
+}
+
 export class Viewer {
   constructor(canvas) {
     this.canvas = canvas;
@@ -369,15 +375,26 @@ export class Viewer {
   }
 
   /**
-   * Shows the move gizmo at a point in CAD coordinates. `onMove(delta)` gets
-   * the distance moved since the drag started, in CAD coordinates.
+   * Shows the gizmo at a point in CAD coordinates. In 'translate' mode
+   * `onMove(delta)` gets the distance moved since the drag started, in CAD
+   * coordinates; in 'rotate' mode it gets the turn since the drag started, as
+   * a quaternion [x, y, z, w] about the CAD axes. It gets null when a drag ends.
    */
-  attachGizmo(point, onMove) {
+  attachGizmo(point, onMove, mode = 'translate') {
+    this.gizmo.setMode(mode);
     this._gizmoProxy.position.fromArray(point);
+    this._gizmoProxy.quaternion.identity();
     this._gizmoStart = this._gizmoProxy.position.clone();
-    this._gizmoMove = () => onMove(this._gizmoProxy.position.clone().sub(this._gizmoStart).toArray());
+    this._gizmoMove = () =>
+      onMove(
+        mode === 'rotate'
+          ? this._gizmoProxy.quaternion.toArray()
+          : this._gizmoProxy.position.clone().sub(this._gizmoStart).toArray(),
+      );
     this._gizmoEnd = () => {
       this._gizmoStart = this._gizmoProxy.position.clone();
+      // The rings stay lined up with the CAD axes for the next turn.
+      this._gizmoProxy.quaternion.identity();
       onMove(null);
     };
     this.gizmo.attach(this._gizmoProxy);
@@ -553,15 +570,45 @@ export class Viewer {
   }
 
   /**
-   * Moves parts away from their place for an exploded view. `offsets` maps
-   * part ids to offsets [x, y, z] in CAD coordinates; parts not in it go back.
+   * Places the parts. `offsets` and `rotations` are the user's own placement:
+   * part id → [x, y, z] offset in CAD coordinates, and part id → [x, y, z]
+   * angles in degrees, turned around the part's centre. `exploded` holds the
+   * extra offsets of an exploded view. Parts in none of them go back to their
+   * CAD position.
    */
-  setPartOffsets(offsets) {
+  setPartTransforms(offsets, rotations = new Map(), exploded = new Map()) {
+    const center = new THREE.Vector3();
+    const turned = new THREE.Vector3();
+    let placementChanged = false;
     for (const part of this.parts) {
       const offset = offsets.get(part.id);
-      if (offset) part.mesh.position.fromArray(offset);
-      else part.mesh.position.set(0, 0, 0);
+      const angles = rotations.get(part.id);
+      const extra = exploded.get(part.id);
+      const mesh = part.mesh;
+      mesh.position.set(0, 0, 0);
+      mesh.rotation.set(0, 0, 0);
+      if (angles) {
+        mesh.rotation.set(...angles.map((value) => THREE.MathUtils.degToRad(value)), 'XYZ');
+        // Turn around the centre of the part, not the CAD origin.
+        mesh.geometry.boundingBox.getCenter(center);
+        turned.copy(center).applyQuaternion(mesh.quaternion);
+        mesh.position.add(center).sub(turned);
+      }
+      if (offset) mesh.position.add(turned.fromArray(offset));
+      mesh.updateMatrix();
+      // Section cuts go through the assembly as the user placed it, and travel with the part in an exploded view.
+      const placement = offset || angles ? mesh.matrix.clone() : null;
+      if (!sameMatrix(placement, part.placement)) placementChanged = true;
+      part.placement = placement;
+      if (extra) {
+        mesh.position.add(turned.fromArray(extra));
+        mesh.updateMatrix();
+      }
       this._applyClipping(part);
+    }
+    if (placementChanged && this.sections.length > 0) {
+      this._capsDirty = true;
+      this._capsChangedAt = performance.now();
     }
     this._updateBounds();
     this._updateShadowSetup();
@@ -887,7 +934,11 @@ export class Viewer {
 
   /** The planes that cut the given part, in CAD coordinates. */
   sectionPlanesFor(part) {
-    return this.sections.filter((section) => !section.uncut.has(part.id)).map((section) => section.plane);
+    const planes = this.sections.filter((section) => !section.uncut.has(part.id)).map((section) => section.plane);
+    if (!part.placement) return planes;
+    // In the part's own coordinates, so a moved or turned part is still cut where the assembly is.
+    const inverse = part.placement.clone().invert();
+    return planes.map((plane) => plane.clone().applyMatrix4(inverse));
   }
 
   /**
@@ -909,10 +960,10 @@ export class Viewer {
 
   _applyClipping(part) {
     const matrix = this.modelRoot.matrixWorld;
-    // Cuts belong to the part, so they move along with it in an exploded view.
-    part.worldPlanes = this.sectionPlanesFor(part).map((plane) =>
-      plane.clone().translate(part.mesh.position).applyMatrix4(matrix),
-    );
+    // Cuts belong to the part, so they move and turn along with it.
+    part.mesh.updateMatrix();
+    const placed = new THREE.Matrix4().multiplyMatrices(matrix, part.mesh.matrix);
+    part.worldPlanes = this.sectionPlanesFor(part).map((plane) => plane.clone().applyMatrix4(placed));
     const planes = part.worldPlanes.length > 0 ? part.worldPlanes : null;
     for (const material of [part.mesh.material, part.edges?.material, part.capMaterial]) {
       if (!material) continue;

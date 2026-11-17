@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { WebGPUPathTracer, OIDNDenoiser } from 'three-gpu-pathtracer/webgpu';
+import { keepRunningInBackground } from './background.js';
 import { PhysicalCamera } from 'three-gpu-pathtracer/src/objects/PhysicalCamera.js';
 import { initUNetFromURL } from 'oidn-webgpu';
 import { fovToFocalLength } from './viewer.js';
@@ -42,9 +43,10 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
     const sides = planes.map((plane) => boxSide(source.boundingBox, plane));
     if (sides.includes(-1)) continue; // cut away completely
     const cutting = planes.filter((plane, i) => sides[i] === 0);
-    // An exploded view moves the part, cut faces included.
+    // Moved, turned or exploded parts take their cut faces along.
     const add = (mesh) => {
       mesh.position.copy(part.mesh.position);
+      mesh.quaternion.copy(part.mesh.quaternion);
       root.add(mesh);
       return mesh;
     };
@@ -421,7 +423,11 @@ export async function startRender(viewer, options) {
     if (state === 'running') state = 'finishing';
   });
 
+  // Keeps going in a background tab, one step whenever the graphics card has finished the last one.
+  const releaseBackground = keepRunningInBackground(() => device.queue.onSubmittedWorkDone());
+
   function cleanup() {
+    releaseBackground();
     pathTracer.dispose();
     for (const object of scene.children) {
       object.traverse((child) => {

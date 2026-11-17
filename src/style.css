@@ -292,6 +292,27 @@ body {
   pointer-events: none;
 }
 
+#guides {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+}
+
+#guides svg {
+  display: block;
+  overflow: visible;
+}
+
+#guides line.under {
+  stroke: rgba(15, 23, 42, 0.35);
+  stroke-width: 2;
+}
+
+#guides line.over {
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1;
+}
+
 #focus-marker {
   position: absolute;
   z-index: 1;

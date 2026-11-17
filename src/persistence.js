@@ -156,6 +156,34 @@ function sanitizeExplode(saved) {
   return explode;
 }
 
+// Default names from the German version of the app, so older projects read in English as well.
+const LEGACY_NAMES = {
+  Hauptlicht: 'Key light',
+  Fülllicht: 'Fill light',
+  Kantenlicht: 'Rim light',
+  Oberlicht: 'Top light',
+  'Streifen links': 'Strip left',
+  'Streifen rechts': 'Strip right',
+  Aufheller: 'Bounce',
+  'Reflektor vorne': 'Front reflector',
+  Sonne: 'Sun',
+  Fensterband: 'Window band',
+};
+const LEGACY_PATTERNS = [
+  [/^Deckenlicht (\d+)$/, 'Ceiling light $1'],
+  [/^Licht (\d+)$/, 'Light $1'],
+  [/^Ansicht (\d+)$/, 'View $1'],
+  [/^Schnitt (\d+)$/, 'Section $1'],
+];
+
+/** The English name for a default name the German version gave; other names stay as they are. */
+export function englishName(name) {
+  if (typeof name !== 'string') return name;
+  if (LEGACY_NAMES[name]) return LEGACY_NAMES[name];
+  for (const [pattern, replacement] of LEGACY_PATTERNS) if (pattern.test(name)) return name.replace(pattern, replacement);
+  return name;
+}
+
 const isVector = (value) => Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
 
 function sanitizeViewState(saved) {
@@ -283,6 +311,7 @@ function modelSnapshot() {
     explode: cloneExplode(state.explode),
     upAxis: state.upAxis,
     partOffsets: Object.fromEntries(state.partOffsets),
+    partRotations: Object.fromEntries(state.partRotations),
     jobs: state.jobs.map(({ id, ...job }) => ({ ...job, explode: cloneExplode(job.explode) })),
     sections: state.sections.map(({ name, axis, position, flip, enabled, uncut }) => ({
       name,
@@ -359,7 +388,10 @@ export function applySettings(record) {
   const savedLights = record.lighting?.lights;
   state.lighting.lights = withIds(
     Array.isArray(savedLights)
-      ? savedLights.map(sanitizeLight).filter(Boolean)
+      ? savedLights
+          .map(sanitizeLight)
+          .filter(Boolean)
+          .map((light) => ({ ...light, name: englishName(light.name) }))
       : state.lighting.presetId === 'custom'
         ? []
         : presetLights(getLightPreset(state.lighting.presetId)),
@@ -383,7 +415,12 @@ export function applyModelData(record) {
   if (!record || record.fileName !== state.fileName || record.partCount !== state.parts.length) return null;
   const valid = validPart;
   state.materials = (record.materials || []).map((entry) => restoreEntry(entry, (entry.partIds || []).filter(valid)));
-  state.views = (record.views || []).map((view) => ({ id: newId(), ...view, explode: sanitizeExplode(view.explode) }));
+  state.views = (record.views || []).map((view) => ({
+    id: newId(),
+    ...view,
+    name: englishName(view.name),
+    explode: sanitizeExplode(view.explode),
+  }));
   state.explode = sanitizeExplode(record.explode);
   state.upAxis = UP_AXES[record.upAxis] ? record.upAxis : '+Z';
   state.partOffsets = new Map(
@@ -391,12 +428,17 @@ export function applyModelData(record) {
       .map(([id, offset]) => [Number(id), offset])
       .filter(([id, offset]) => valid(id) && isVector(offset)),
   );
+  state.partRotations = new Map(
+    Object.entries(record.partRotations || {})
+      .map(([id, angles]) => [Number(id), angles])
+      .filter(([id, angles]) => valid(id) && isVector(angles)),
+  );
   state.jobs = (record.jobs || []).map(sanitizeJob).filter(Boolean);
   state.sections = (record.sections || [])
     .filter((section) => [0, 1, 2].includes(section.axis) && Number.isFinite(section.position))
     .map((section) => ({
       id: newId(),
-      name: String(section.name || 'Section'),
+      name: englishName(String(section.name || 'Section')),
       axis: section.axis,
       position: section.position,
       flip: Boolean(section.flip),

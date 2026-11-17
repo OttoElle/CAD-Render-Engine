@@ -34,6 +34,7 @@ import { LIGHT_PRESETS, MAX_LIGHT_SIZE, getLightPreset, presetLights } from './e
 import { EXPLODE_DIRECTIONS, PART_EXPLODE_DIRECTIONS, partExplode, setPartExplode } from './explode.js';
 import { FILE_FORMATS, videoSupported } from './export.js';
 import { ADJUSTMENTS, isNeutral } from './adjust.js';
+import { GUIDE_TYPES } from './guides.js';
 
 const numberFormat = new Intl.NumberFormat('en-US');
 const F_STOPS = [1.4, 2, 2.8, 4, 5.6, 8, 11, 16, 22];
@@ -244,7 +245,7 @@ function geometryPanel({ actions }) {
 
   const triangles = state.parts.reduce((sum, part) => sum + part.triangles, 0);
   const hidden = state.parts.filter((part) => !part.mesh.visible).length;
-  const moved = state.partOffsets.size;
+  const moved = new Set([...state.partOffsets.keys(), ...state.partRotations.keys()]).size;
   return {
     title: 'Geometry',
     body: [
@@ -273,12 +274,13 @@ function geometryPanel({ actions }) {
         toggle('Show axes', actions.axesVisible(), actions.toggleAxes, 'X red, Y green, Z blue, from the CAD origin (A)'),
         moved > 0
           ? [
-              h('p', { class: 'hint' }, `${plural(moved, 'part', 'parts')} moved from the CAD position.`),
+              h('p', { class: 'hint' }, `${plural(moved, 'part', 'parts')} moved or turned from the CAD position.`),
               h(
                 'button',
                 {
                   onclick: () => {
                     state.partOffsets.clear();
+                    state.partRotations.clear();
                     emit('geometry');
                   },
                 },
@@ -334,7 +336,23 @@ function partPanel(part, { actions }) {
       },
     }),
   );
-  const moving = actions.isGizmoOn(part.id);
+  // Rotation: angles about the CAD axes, around the part's centre.
+  const rotation = () => state.partRotations.get(part.id) || [0, 0, 0];
+  const rotationBoxes = ['X', 'Y', 'Z'].map((axis, i) =>
+    numberBox(`${axis} °`, {
+      value: rotation()[i],
+      step: 15,
+      digits: 1,
+      onchange: (value) => {
+        const next = [...rotation()];
+        next[i] = value;
+        actions.setPartRotation(part.id, next);
+      },
+    }),
+  );
+  const moving = actions.isGizmoOn(part.id, 'translate');
+  const turning = actions.isGizmoOn(part.id, 'rotate');
+  const placed = state.partOffsets.has(part.id) || state.partRotations.has(part.id);
 
   const own = partExplode(state.explode, part.id);
   const setOwn = (changes) => {
@@ -370,9 +388,10 @@ function partPanel(part, { actions }) {
         h('button', { onclick: () => actions.isolatePart(part.id) }, 'Show only this'),
         h('button', { onclick: actions.showAllParts }, 'Show all'),
       ),
-      group('part-position', 'Position', [
-        h('p', { class: 'hint' }, 'Offset from the CAD position, along the CAD axes.'),
+      group('part-position', 'Position and rotation', [
+        h('p', { class: 'hint' }, 'Offset from the CAD position along the CAD axes, and turn about the CAD axes around the part\'s centre.'),
         h('div', { class: 'field-grid three' }, positionBoxes),
+        h('div', { class: 'field-grid three' }, rotationBoxes),
         h(
           'div',
           { class: 'button-row' },
@@ -380,15 +399,25 @@ function partPanel(part, { actions }) {
             'button',
             {
               class: moving ? 'active' : '',
-              onclick: () => actions.toggleGizmo(part.id),
+              onclick: () => actions.toggleGizmo(part.id, 'translate'),
               title: 'Drag the arrows in the viewport to move the part',
             },
             icon('move', 15),
-            moving ? 'Stop moving' : 'Move',
+            'Move',
           ),
           h(
             'button',
-            { onclick: () => actions.setPartOffset(part.id, null), disabled: !state.partOffsets.has(part.id) },
+            {
+              class: turning ? 'active' : '',
+              onclick: () => actions.toggleGizmo(part.id, 'rotate'),
+              title: 'Drag the rings in the viewport to turn the part',
+            },
+            icon('rotate', 15),
+            'Rotate',
+          ),
+          h(
+            'button',
+            { onclick: () => actions.resetPartPlacement(part.id), disabled: !placed, title: 'Back to the CAD position' },
             'Reset',
           ),
         ),
@@ -430,7 +459,10 @@ function partPanel(part, { actions }) {
         : null,
       h('p', { class: 'hint' }, plural(part.triangles, 'triangle', 'triangles')),
     ],
-    live: () => positionBoxes.forEach((box, i) => box.set(offset()[i])),
+    live: () => {
+      positionBoxes.forEach((box, i) => box.set(offset()[i]));
+      rotationBoxes.forEach((box, i) => box.set(rotation()[i]));
+    },
   };
 }
 
@@ -1138,6 +1170,7 @@ function viewsPanel({ viewer, actions }) {
         h('button', { onclick: () => viewer.fit() }, 'Fit'),
         h('button', { onclick: () => viewer.home() }, 'Default view'),
       ),
+      guidesControls(actions),
       group(
         'camera-numbers',
         'Camera in numbers',
@@ -1456,6 +1489,17 @@ function outputPanel({ actions }) {
   };
 }
 
+/** Guide lines over the image area, for lining up the model. */
+function guidesControls(actions) {
+  const guides = actions.guides();
+  return [
+    toggle('Guide lines', guides.visible, (checked) => actions.setGuides({ visible: checked }), 'Lines over the image area for lining up the model; they are not rendered (G)'),
+    guides.visible
+      ? field('Lines', selectControl(Object.entries(GUIDE_TYPES), guides.type, (value) => actions.setGuides({ type: value })))
+      : null,
+  ];
+}
+
 function jobPanel(job, { actions }) {
   const changed = () => actions.jobChanged(job);
   const set = (key) => (value) => {
@@ -1488,6 +1532,7 @@ function jobPanel(job, { actions }) {
         { onclick: () => actions.fit(), title: 'The dashed frame in the viewport shows the image' },
         'Fit the model into the frame',
       ),
+      guidesControls(actions),
       job.type === 'animation'
         ? group('job-animation', 'Turntable', [
             field(

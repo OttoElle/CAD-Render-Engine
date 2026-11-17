@@ -147,6 +147,8 @@ export const state = {
   upAxis: '+Z',
   /** Parts moved by the user: part id → [x, y, z] offset in CAD coordinates (mm). */
   partOffsets: new Map(),
+  /** Parts turned by the user: part id → [x, y, z] angles in degrees about the CAD axes, around the part's centre. */
+  partRotations: new Map(),
   /** Saved views: { id, name, position, target, fov, roll, explode }. */
   views: [],
   output: defaultOutput(),
@@ -248,6 +250,7 @@ export function resetForModel(fileName, parts) {
   state.explode = defaultExplode();
   state.upAxis = '+Z';
   state.partOffsets = new Map();
+  state.partRotations = new Map();
   state.views = [];
   state.jobs = [];
 }

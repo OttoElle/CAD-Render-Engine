@@ -1,5 +1,6 @@
-import { Vector3 } from 'three';
+import { Euler, MathUtils, Quaternion, Vector3 } from 'three';
 import { Viewer } from './viewer.js';
+import { drawGuides, loadGuides, saveGuides } from './guides.js';
 import { ViewCube } from './viewcube.js';
 import { loadStepFile } from './step-loader.js';
 import { getMaterialDef, resolveLook } from './materials.js';
@@ -91,6 +92,8 @@ const focusMarkerEl = $('#focus-marker');
 const renderViewEl = $('#render-view');
 const edgesBtn = $('#edges-btn');
 const axesBtn = $('#axes-btn');
+const guidesBtn = $('#guides-btn');
+const guidesEl = $('#guides');
 const projectChip = $('#project-chip');
 const projectsBtn = $('#projects-btn');
 const overviewEl = $('#overview');
@@ -112,10 +115,15 @@ let panelSnapshot = null;
 let pendingSnapshot = null;
 /** Part whose move gizmo is shown, or null. */
 let gizmoPart = null;
+let gizmoMode = 'translate';
 
 $('#fit-btn').append(icon('fit', 16), 'Fit');
 edgesBtn.append(icon('edges', 16), 'Edges');
 axesBtn.append(icon('axes', 16), 'Axes');
+guidesBtn.append(icon('grid', 16), 'Guides');
+/** Guide lines over the render frame: { visible, type }, remembered in this browser. */
+const guides = loadGuides();
+guidesBtn.setAttribute('aria-pressed', String(guides.visible));
 
 function setStatus(text, { error = false, timeout = 0 } = {}) {
   clearTimeout(statusTimer);
@@ -158,17 +166,10 @@ function applySceneAndLighting() {
   });
 }
 
-/** Puts the parts where the user moved them, plus how far an exploded view moves them apart. */
+/** Puts the parts where the user moved and turned them, plus how far an exploded view moves them apart. */
 function applyExplode() {
   const exploded = explodeOffsets(state.parts, state.explode, state.partOffsets);
-  const offsets = new Map();
-  for (const part of state.parts) {
-    const own = state.partOffsets.get(part.id);
-    const extra = exploded.get(part.id);
-    if (!own && !extra) continue;
-    offsets.set(part.id, [0, 1, 2].map((i) => (own?.[i] || 0) + (extra?.[i] || 0)));
-  }
-  viewer.setPartOffsets(offsets);
+  viewer.setPartTransforms(state.partOffsets, state.partRotations, exploded);
   if (gizmoPart !== null) viewer.placeGizmo(partCenter(gizmoPart));
 }
 
@@ -183,31 +184,51 @@ function applyUpAxis() {
 /** Centre of a part as it stands, in CAD coordinates. */
 function partCenter(id) {
   const part = state.parts[id];
-  return part.mesh.geometry.boundingBox.getCenter(new Vector3()).add(part.mesh.position).toArray();
+  return part.mesh.geometry.boundingBox.getCenter(new Vector3()).applyMatrix4(part.mesh.matrix).toArray();
 }
 
-/** Shows the move gizmo on a part, or hides it (null). */
-function setGizmoPart(id) {
+/** Rounds an angle to a tenth of a degree, within −180° to 180°. */
+function roundAngle(degrees) {
+  const wrapped = ((((degrees + 180) % 360) + 360) % 360) - 180;
+  return Math.round(wrapped * 10) / 10 || 0;
+}
+
+/** Shows the gizmo for moving ('translate') or turning ('rotate') a part, or hides it (id null). */
+function setGizmoPart(id, mode = 'translate') {
   gizmoPart = id;
+  gizmoMode = mode;
   if (id === null) {
     viewer.detachGizmo();
     return;
   }
   let start = null;
-  viewer.attachGizmo(partCenter(id), (delta) => {
+  const onMove = (delta) => {
     if (delta === null) {
       start = null;
       emit('geometry');
       return;
     }
-    start ??= [...(state.partOffsets.get(id) || [0, 0, 0])];
-    state.partOffsets.set(
-      id,
-      start.map((value, i) => Math.round((value + delta[i]) * 100) / 100),
-    );
+    if (mode === 'rotate') {
+      start ??= new Quaternion().setFromEuler(
+        new Euler(...(state.partRotations.get(id) || [0, 0, 0]).map((value) => MathUtils.degToRad(value)), 'XYZ'),
+      );
+      // The turn is about the CAD axes, so it comes before the part's own rotation.
+      const turned = new Quaternion().fromArray(delta).multiply(start);
+      const angles = new Euler().setFromQuaternion(turned, 'XYZ').toArray().slice(0, 3);
+      const rounded = angles.map((value) => roundAngle(MathUtils.radToDeg(value)));
+      if (rounded.some((value) => value !== 0)) state.partRotations.set(id, rounded);
+      else state.partRotations.delete(id);
+    } else {
+      start ??= [...(state.partOffsets.get(id) || [0, 0, 0])];
+      state.partOffsets.set(
+        id,
+        start.map((value, i) => Math.round((value + delta[i]) * 100) / 100),
+      );
+    }
     applyExplode();
     panelLive?.();
-  });
+  };
+  viewer.attachGizmo(partCenter(id), onMove, mode);
 }
 
 /** Shows a saved view or a render job's camera, including how far the assembly was exploded. */
@@ -297,13 +318,20 @@ function updateOutputFrame() {
   outputFrameEl.hidden = !show;
   const frame = viewer.getOutputFrame(width / height);
   viewer.setBackdropFrame(frame);
-  if (!show) return;
-  Object.assign(outputFrameEl.style, {
+  const box = {
     left: `${frame.x}px`,
     top: `${frame.y}px`,
     width: `${frame.width}px`,
     height: `${frame.height}px`,
-  });
+  };
+  // Guides cover the frame of the open job, or the free view when the image takes its proportions.
+  const guided = guides.visible && state.parts.length > 0;
+  guidesEl.hidden = !guided;
+  if (guided) {
+    Object.assign(guidesEl.style, box);
+    drawGuides(guidesEl, guides.type, frame.width, frame.height);
+  }
+  if (show) Object.assign(outputFrameEl.style, box);
 }
 
 /** Keeps the 3D view centred in the area that the sidebar and the open panel leave free. */
@@ -1399,13 +1427,25 @@ const actions = {
     else state.partOffsets.delete(id);
     emit('geometry');
   },
-  toggleGizmo: (id) => {
-    setGizmoPart(gizmoPart === id ? null : id);
+  setPartRotation: (id, angles) => {
+    if (angles && angles.some((value) => value !== 0)) state.partRotations.set(id, angles.map(roundAngle));
+    else state.partRotations.delete(id);
+    emit('geometry');
+  },
+  resetPartPlacement: (id) => {
+    state.partOffsets.delete(id);
+    state.partRotations.delete(id);
+    emit('geometry');
+  },
+  toggleGizmo: (id, mode = 'translate') => {
+    setGizmoPart(gizmoPart === id && gizmoMode === mode ? null : id, mode);
     emit('geometry:live');
   },
-  isGizmoOn: (id) => gizmoPart === id,
+  isGizmoOn: (id, mode = 'translate') => gizmoPart === id && gizmoMode === mode,
   axesVisible: () => viewer.axesHelper.visible,
   toggleAxes,
+  guides: () => ({ ...guides }),
+  setGuides,
   hover: (ids) => viewer.setHighlight(ids ?? selectionHighlight()),
   loadHdri: () => hdriInput.click(),
   addLight: () => {
@@ -1668,6 +1708,15 @@ function toggleAxes() {
 }
 axesBtn.addEventListener('click', toggleAxes);
 
+function setGuides(changes) {
+  Object.assign(guides, changes);
+  saveGuides(guides);
+  guidesBtn.setAttribute('aria-pressed', String(guides.visible));
+  updateOutputFrame();
+  if (state.selected === 'views' || state.selected.startsWith('job:')) emit('selection');
+}
+guidesBtn.addEventListener('click', () => setGuides({ visible: !guides.visible }));
+
 window.addEventListener('keydown', (event) => {
   const tag = event.target.tagName;
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || event.metaKey || event.ctrlKey) return;
@@ -1681,6 +1730,7 @@ window.addEventListener('keydown', (event) => {
   if (event.key === 'f' || event.key === 'F') viewer.fit();
   if (event.key === 'e' || event.key === 'E') toggleEdges();
   if (event.key === 'a' || event.key === 'A') toggleAxes();
+  if (event.key === 'g' || event.key === 'G') setGuides({ visible: !guides.visible });
   if (event.key === 'Escape') {
     if (pickingFocus) actions.pickFocus();
     if (pickingHighlight) actions.pickHighlight(pickingHighlight);
