@@ -35,7 +35,6 @@ import { EXPLODE_DIRECTIONS, PART_EXPLODE_DIRECTIONS, partExplode, setPartExplod
 import { HATCH_PATTERNS, hatchSpacing } from './hatch.js';
 import { FILE_FORMATS, videoSupported } from './export.js';
 import { ADJUSTMENTS, isNeutral } from './adjust.js';
-import { GUIDE_TYPES } from './guides.js';
 import { shortcutLabel } from './shortcuts.js';
 
 const numberFormat = new Intl.NumberFormat('en-US');
@@ -329,7 +328,6 @@ function geometryPanel({ actions }) {
     ],
     footer: [
       h('button', { onclick: actions.openFile }, icon('folder', 15), 'Open another file …'),
-      hidden > 0 ? h('button', { onclick: actions.showAllParts }, icon('eye', 15), 'Show all') : null,
     ],
   };
 }
@@ -340,7 +338,7 @@ function explodePanel({ actions }) {
     title: 'Exploded view',
     icon: 'explode',
     body: [
-      h('p', { class: 'hint' }, 'Pulls the parts of an assembly apart to show how it is built. Render jobs keep their own setting.'),
+      h('p', { class: 'hint' }, 'Pulls the parts of an assembly apart to show how it is built.'),
       explodeControls(false),
     ],
     footer: [deleteButton('Remove', actions.deleteExplode)],
@@ -352,20 +350,6 @@ function partsSelectionPanel(parts, { actions }) {
   const ids = parts.map((part) => part.id);
   const anyHidden = parts.some((part) => !part.mesh.visible);
   const placed = ids.some((id) => state.partOffsets.has(id) || state.partRotations.has(id));
-  const entries = new Set(parts.map((part) => materialEntryOf(part.id)?.id ?? 'cad'));
-  const assign = (value) => {
-    if (value === 'mixed') return;
-    if (value === 'cad') {
-      setPartsAssigned(null, ids, false);
-    } else if (value === 'new') {
-      const created = addMaterial(undefined, { claimAll: false });
-      setPartsAssigned(created, ids, true);
-      select(`material:${created.id}`);
-    } else {
-      const target = state.materials.find((item) => item.id === Number(value));
-      if (target) setPartsAssigned(target, ids, true);
-    }
-  };
   return {
     title: `${parts.length} parts`,
     icon: 'partGroup',
@@ -389,19 +373,7 @@ function partsSelectionPanel(parts, { actions }) {
         ],
         actions,
       ),
-      field(
-        'Material',
-        selectControl(
-          [
-            ...(entries.size > 1 ? [['mixed', 'Different']] : []),
-            ['cad', 'CAD colour'],
-            ...state.materials.map((item) => [String(item.id), materialEntryLabel(item)]),
-            ['new', 'New material …'],
-          ],
-          entries.size > 1 ? 'mixed' : String([...entries][0]),
-          assign,
-        ),
-      ),
+      materialLink(parts),
       h(
         'div',
         { class: 'button-row' },
@@ -415,6 +387,26 @@ function partsSelectionPanel(parts, { actions }) {
     ],
     footer: [deleteButton(`Delete ${parts.length} parts`, () => actions.deleteParts(ids))],
   };
+}
+
+/**
+ * Which material the parts have, as a button that opens it. Parts get their
+ * material in the material's own panel, so there is one place for that.
+ */
+function materialLink(parts) {
+  const entries = [...new Set(parts.map((part) => materialEntryOf(part.id)))];
+  if (entries.length > 1) return field('Material', h('span', { class: 'field-text' }, 'Different materials'));
+  const [entry] = entries;
+  return field(
+    'Material',
+    h(
+      'button',
+      { class: 'link-button', onclick: () => select(entry ? `material:${entry.id}` : 'material:cad'), title: 'Open the material' },
+      h('span', { class: 'swatch round', style: { background: entry ? entry.colorHex : parts[0].colorHex } }),
+      h('span', { class: 'link-label' }, entry ? materialEntryLabel(entry) : 'CAD colour'),
+      icon('chevronRight', 14),
+    ),
+  );
 }
 
 /** The switch for the move tool in the viewport and a button that puts parts back. */
@@ -446,22 +438,6 @@ function moveToolRow(ids, placed, actions) {
 }
 
 function partPanel(part, { actions }) {
-  const entry = materialEntryOf(part.id);
-  const copies = state.parts.filter((other) => other.name === part.name && other.triangles === part.triangles).length;
-  const assign = (value) => {
-    const ids = identicalParts(part).map((item) => item.id);
-    if (value === 'cad') {
-      setPartsAssigned(null, ids, false);
-    } else if (value === 'new') {
-      const created = addMaterial(undefined, { claimAll: false });
-      setPartsAssigned(created, ids, true);
-      select(`material:${created.id}`);
-    } else {
-      const target = state.materials.find((item) => item.id === Number(value));
-      if (target) setPartsAssigned(target, ids, true);
-    }
-  };
-
   // Position: an offset from where the CAD model puts the part.
   const offset = () => state.partOffsets.get(part.id) || [0, 0, 0];
   const positionBoxes = ['X', 'Y', 'Z'].map((axis, i) =>
@@ -502,31 +478,8 @@ function partPanel(part, { actions }) {
     title: part.label,
     icon: 'part',
     body: [
-      toggle('Visible', part.mesh.visible, () => actions.togglePart(part.id)),
-      field(
-        'Material',
-        selectControl(
-          [
-            ['cad', 'CAD colour'],
-            ...state.materials.map((item) => [String(item.id), materialEntryLabel(item)]),
-            ['new', 'New material …'],
-          ],
-          entry ? String(entry.id) : 'cad',
-          assign,
-        ),
-      ),
-      copies > 1
-        ? toggle(`Identical parts together (${copies})`, linkIdentical, (checked) => {
-            linkIdentical = checked;
-          })
-        : null,
-      entry ? h('button', { onclick: () => select(`material:${entry.id}`) }, 'Edit material') : null,
-      h(
-        'div',
-        { class: 'button-row' },
-        h('button', { onclick: () => actions.isolatePart(part.id) }, 'Show only this'),
-        h('button', { onclick: actions.showAllParts }, 'Show all'),
-      ),
+      materialLink([part]),
+      h('div', { class: 'button-row' }, h('button', { onclick: () => actions.isolatePart(part.id) }, 'Show only this')),
       group('part-position', 'Position and rotation', [
         caption('Offset from the CAD position'),
         h('div', { class: 'field-grid three' }, positionBoxes),
@@ -650,7 +603,6 @@ function sectionPanel(section, { viewer, actions }) {
         section.name = value || 'Section';
         emit('sections:live');
       }),
-      toggle('Active', section.enabled, set('enabled')),
       field(
         'Cuts across',
         selectControl(
@@ -972,7 +924,6 @@ function scenePanel(which, { actions }) {
       body: environment
         ? [
             h('p', { class: 'hint' }, 'With a scene as background, the scene brings its own ground.'),
-            h('button', { onclick: () => set('background')('light') }, 'Use a colour background'),
           ]
         : [
             field(
@@ -1043,9 +994,8 @@ function scenePanel(which, { actions }) {
               { class: 'hint' },
               state.lighting.presetId === 'custom'
                 ? `The HDRI "${state.lighting.hdriName}" shows behind the model and brings its own ground.`
-                : 'The lighting studio shows behind the model. For a photo background, load an HDRI file.',
+                : 'The lighting studio shows behind the model. A photo background is an HDRI file under Lighting › Light setup.',
             ),
-            h('button', { onclick: actions.loadHdri }, icon('upload', 15), state.lighting.presetId === 'custom' ? 'Other HDRI file …' : 'Load HDRI file …'),
           ]
         : [
             field(
@@ -1169,7 +1119,6 @@ function lightPanel(light, { actions }) {
         light.name = value || 'Softbox';
         emit('lighting:live');
       }),
-      toggle('Active', light.enabled, set('enabled', false)),
       group('light-position', 'Position', [
         h(
           'button',
@@ -1297,13 +1246,6 @@ function viewsPanel({ viewer, actions }) {
         viewer.setParallel(checked);
         emit('views');
       }),
-      h(
-        'div',
-        { class: 'button-row' },
-        h('button', { onclick: () => viewer.fit() }, 'Fit'),
-        h('button', { onclick: () => viewer.home() }, 'Default view'),
-      ),
-      guidesControls(actions),
       group(
         'camera-numbers',
         'Camera in numbers',
@@ -1322,7 +1264,6 @@ function viewsPanel({ viewer, actions }) {
             'For a blurred background or foreground, add Depth of field with the + of the camera.',
           ),
     ],
-    footer: [h('button', { onclick: actions.addView }, icon('bookmark', 15), 'Save view')],
     live: () => {
       const current = viewer.getPose();
       for (const key of Object.keys(boxes)) boxes[key].set(current[key]);
@@ -1571,16 +1512,6 @@ export function deviceControls() {
 }
 
 /** Guide lines over the image area, for lining up the model. */
-function guidesControls(actions) {
-  const guides = actions.guides();
-  return [
-    toggle('Guide lines', guides.visible, (checked) => actions.setGuides({ visible: checked }), 'Lines over the image area for lining up the model; they are not rendered (G)'),
-    guides.visible
-      ? field('Lines', selectControl(Object.entries(GUIDE_TYPES), guides.type, (value) => actions.setGuides({ type: value })))
-      : null,
-  ];
-}
-
 function jobPanel(job, { actions }) {
   const changed = () => actions.jobChanged(job);
   const set = (key) => (value) => {
@@ -1609,13 +1540,6 @@ function jobPanel(job, { actions }) {
         { class: 'hint' },
         'While this job is open it takes the camera along: move the view until the frame shows what you want.',
       ),
-      h(
-        'button',
-        { onclick: () => actions.fit(), title: 'The dashed frame in the viewport shows the image' },
-        icon('fit', 15),
-        'Fit the model into the frame',
-      ),
-      guidesControls(actions),
       job.type === 'animation'
         ? group('job-animation', 'Turntable', [
             field(
@@ -1643,7 +1567,6 @@ function jobPanel(job, { actions }) {
           ])
         : null,
       imageSettings(job, { actions, onchange: changed }),
-      explodeControls(),
       actions.renderSupported ? null : notice(NO_WEBGPU, null, 'warning'),
     ],
     footer: [

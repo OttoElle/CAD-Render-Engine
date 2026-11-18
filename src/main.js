@@ -1,6 +1,7 @@
 import { Euler, MathUtils, Quaternion, Vector3 } from 'three';
 import { Viewer } from './viewer.js';
-import { drawGuides, loadGuides, saveGuides } from './guides.js';
+import { drawGuides, loadGuides, saveGuides, GUIDE_TYPES } from './guides.js';
+import { openMenu } from './menu.js';
 import { SHORTCUT_ACTIONS, shortcutFor, shortcutLabel } from './shortcuts.js';
 import { renderSettings, isRecordingShortcut } from './settings.js';
 import { ViewCube } from './viewcube.js';
@@ -36,10 +37,11 @@ import {
   saveNow,
   files,
   fileKeys,
+  addedFileCount,
 } from './persistence.js';
 import { sectionToPlane } from './section.js';
 import { sceneGradient } from './backdrop.js';
-import { explodeOffsets, cloneExplode, defaultExplode } from './explode.js';
+import { explodeOffsets, defaultExplode } from './explode.js';
 import { adjustCss, adjustImage } from './adjust.js';
 import {
   FILE_FORMATS,
@@ -352,13 +354,9 @@ function applyRemoved(ids) {
   }
 }
 
-/** Shows a saved view or a render job's camera, including how far the assembly was exploded. */
+/** Shows a saved view or a render job's camera. The exploded view is set only under Geometry. */
 function showView(view) {
   viewer.applyViewState(view.camera || view);
-  if (view.explode) {
-    state.explode = cloneExplode(view.explode);
-    applyExplode();
-  }
 }
 
 /** Hands the active section cuts to the 3D view and outlines the one being edited. */
@@ -524,7 +522,6 @@ function createJob(type = 'image', { name, view } = {}) {
     name: name || `${type === 'animation' ? 'Turntable' : 'Image'} ${count}`,
     type,
     camera: view ? { position: view.position, target: view.target, fov: view.fov, roll: view.roll } : viewer.getViewState(),
-    explode: cloneExplode(view?.explode || state.explode),
   };
   for (const key of JOB_SETTINGS) job[key] = source[key] ?? state.output[key];
   state.jobs.push(job);
@@ -600,7 +597,7 @@ function queueRender(job) {
     url: null,
     error: null,
     output,
-    view: { ...job.camera, explode: cloneExplode(job.explode) },
+    view: { ...job.camera },
     // A turntable series keeps all its images; `shownFrame` is the one on screen.
     turntable: job.type === 'animation' ? job.turntableFrames : 0,
     turntableSeconds: job.turntableSeconds,
@@ -681,14 +678,12 @@ async function runRender(render) {
           reflectionBlur: state.scene.reflectionBlur,
           shadow: state.scene.shadow,
         },
-        // Right before the scene is read: show the camera and explosion this rendering was queued with.
+        // Right before the scene is read: show the camera this rendering was queued with.
         prepare: () => {
           if (index === 0) {
             applyingRenderView = true;
             viewer.applyViewState(render.view);
             applyingRenderView = false;
-            state.explode = cloneExplode(render.view.explode);
-            applyExplode();
           }
           return {
             fov: viewer.getOutputFrame(render.width / render.height).fov,
@@ -1097,10 +1092,30 @@ async function loadModel(file, { record, store }) {
   try {
     const parts = await loadStepFile(file);
     if (token !== projectToken) return;
+    // Parts the user added from further files come after those of the model, in the order they were added.
+    const added = [];
+    if (!store) {
+      for (let i = 0; i < addedFileCount(record); i++) {
+        const extra = await files.get(fileKeys.addedStep(record.id, i));
+        if (token !== projectToken) return;
+        if (!extra) {
+          setStatus(`${record.addedFiles[i].name} is no longer stored. Please add it again.`, { error: true });
+          break;
+        }
+        const extraParts = await loadStepFile(extra);
+        if (token !== projectToken) return;
+        appendParts(parts, extraParts);
+        added.push({ name: extra.name, partCount: extraParts.length });
+      }
+    } else {
+      // A new model replaces the parts added to the old one.
+      for (let i = 0; i < state.addedFiles.length; i++) files.delete(fileKeys.addedStep(state.project.id, i));
+    }
 
     viewer.detachGizmo();
     viewer.setParts(parts);
     resetForModel(file.name, parts);
+    state.addedFiles = added;
     const restored = applyModelData(record);
     if (restored) {
       for (const id of restored.hidden) viewer.setPartVisible(id, false);
@@ -1131,6 +1146,66 @@ async function loadModel(file, { record, store }) {
     }
   }
 }
+
+/** Puts parts of a further file after the existing ones; ids continue the count. */
+function appendParts(parts, extra) {
+  const labels = new Set(parts.map((part) => part.label));
+  for (const part of extra) {
+    part.id = parts.length;
+    // Keep labels apart from those of the parts already there.
+    let label = part.label;
+    for (let n = 2; labels.has(label); n++) label = `${part.label} (${n})`;
+    part.label = label;
+    labels.add(label);
+    parts.push(part);
+  }
+}
+
+/** Adds the parts of another STEP file to the model, e.g. a bracket to an assembly. */
+async function addPartFile(file) {
+  if (!file) return;
+  if (state.parts.length === 0) {
+    await openFile(file);
+    return;
+  }
+  if (loading) {
+    setStatus('A model is still loading. Please wait a moment and add the part again.', { error: true, timeout: 4000 });
+    return;
+  }
+  if (!/\.(step|stp)$/i.test(file.name)) {
+    setStatus('Please choose a STEP file (.step or .stp).', { error: true });
+    return;
+  }
+  const token = projectToken;
+  loading = true;
+  setStatus(`Adding ${file.name} …`);
+  try {
+    const extra = await loadStepFile(file);
+    if (token !== projectToken) return;
+    const index = state.addedFiles.length;
+    appendParts(state.parts, extra);
+    viewer.addParts(extra);
+    state.addedFiles.push({ name: file.name, partCount: extra.length });
+    files.put(fileKeys.addedStep(state.project.id, index), file);
+    setCollapsed('parts', false);
+    setStatus(`${extra.length === 1 ? extra[0].label : `${extra.length} parts`} added from ${file.name}`, { timeout: 3000 });
+    if (extra.length === 1) selectPart(extra[0].id);
+  } catch (error) {
+    console.error(error);
+    setStatus(`Import failed: ${error.message}`, { error: true });
+  } finally {
+    loading = false;
+    if (token === projectToken) emit('model');
+  }
+}
+
+const partInput = h('input', { type: 'file', accept: '.step,.stp', hidden: true });
+partInput.addEventListener('change', () => {
+  const file = partInput.files[0];
+  partInput.value = '';
+  addPartFile(file);
+});
+document.body.append(partInput);
 
 /** Makes a stored project the one on screen: settings first, then its HDRI and model. */
 async function openProject(record) {
@@ -1204,8 +1279,13 @@ function exportProject(id = state.project.id) {
   if (!record) return;
   return exporting('Exporting project …', async () => {
     const step = record.fileName ? await files.get(fileKeys.step(record.id)) : null;
+    const added = [];
+    for (let i = 0; i < (step ? addedFileCount(record) : 0); i++) {
+      const file = await files.get(fileKeys.addedStep(record.id, i));
+      if (file) added.push(file);
+    }
     const hdri = record.lighting?.presetId === 'custom' ? await files.get(fileKeys.hdri(record.id)) : null;
-    const blob = await packProject(record, { step, hdri });
+    const blob = await packProject(record, { step, added, hdri });
     downloadBlob(blob, `${safeFileName(record.name) || 'Project'}.${PROJECT_EXTENSION}`);
   });
 }
@@ -1351,7 +1431,7 @@ async function finishImport(data, replace) {
   // Replacing the open project: its pending changes must not be written over the imported one.
   if (replace && data.record.id === state.project.id) suspendSaving(true);
   else saveNow();
-  const record = await importProject(data.record, { step: data.step, hdri: data.hdri, replace });
+  const record = await importProject(data.record, { step: data.step, added: data.added, hdri: data.hdri, replace });
   setCurrentProject(record.id);
   await openProject(record);
   setStatus(`Project "${record.name}" imported`, { timeout: 3000 });
@@ -1512,6 +1592,7 @@ const actions = {
     emit('project');
   },
   addSection,
+  addPart: () => (state.parts.length > 0 ? partInput.click() : fileInput.click()),
   sectionFacesCamera,
   addExplode: () => {
     if (state.parts.length < 2) return;
@@ -1570,7 +1651,6 @@ const actions = {
       id: newId(),
       name: `View ${state.views.length + 1}`,
       ...viewer.getViewState(),
-      explode: cloneExplode(state.explode),
     };
     state.views.push(view);
     select(`view:${view.id}`);
@@ -1712,11 +1792,6 @@ function refresh(what) {
     const job = selectedJob();
     if (job) showView(job);
     viewer.setHoverEnabled(pickingParts());
-  }
-  // An open render job keeps the explosion set in its panel.
-  if (area === 'explode') {
-    const job = selectedJob();
-    if (job) job.explode = cloneExplode(state.explode);
   }
 
   if (area === 'model' || area === 'geometry') applyUpAxis();
@@ -1928,7 +2003,18 @@ function setGuides(changes) {
   updateOutputFrame();
   if (state.selected === 'views' || state.selected.startsWith('job:')) emit('selection');
 }
-guidesBtn.addEventListener('click', () => setGuides({ visible: !guides.visible }));
+// The toolbar is the one place for guide lines: the button lists the kinds and turns them off.
+guidesBtn.addEventListener('click', () =>
+  openMenu(guidesBtn, [
+    ...Object.entries(GUIDE_TYPES).map(([type, label]) => ({
+      label,
+      icon: guides.visible && guides.type === type ? 'check' : null,
+      run: () => setGuides({ visible: true, type }),
+    })),
+    null,
+    { label: 'No guide lines', icon: guides.visible ? null : 'check', run: () => setGuides({ visible: false }) },
+  ]),
+);
 
 function toggleGizmo() {
   gizmoOn = !gizmoOn;

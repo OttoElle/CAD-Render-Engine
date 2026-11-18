@@ -103,6 +103,8 @@ const warn = (error) => console.warn('File storage failed.', error);
 
 export const fileKeys = {
   step: (projectId) => `step:${projectId}`,
+  /** A further STEP file whose parts were added to the model; `index` counts from 0. */
+  addedStep: (projectId, index) => `step:${projectId}:added:${index}`,
   hdri: (projectId) => `hdri:${projectId}`,
   templateHdri: (templateId) => `hdri:template:${templateId}`,
   thumbnail: (projectId) => `thumb:${projectId}`,
@@ -218,7 +220,6 @@ function sanitizeJob(saved) {
     name: typeof saved.name === 'string' && saved.name.trim() ? saved.name : 'Render job',
     type: saved.type === 'animation' ? 'animation' : 'image',
     camera,
-    explode: sanitizeExplode(saved.explode),
   };
   for (const key of JOB_SETTINGS) job[key] = typeof saved[key] === typeof defaults[key] ? saved[key] : defaults[key];
   return sanitizeImageSettings(job);
@@ -301,19 +302,12 @@ function modelSnapshot() {
       tuning: { ...entry.tuning },
       partIds: [...entry.partIds],
     })),
-    views: state.views.map(({ name, position, target, fov, roll, explode }) => ({
-      name,
-      position,
-      target,
-      fov,
-      roll,
-      explode: cloneExplode(explode),
-    })),
+    views: state.views.map(({ name, position, target, fov, roll }) => ({ name, position, target, fov, roll })),
     explode: cloneExplode(state.explode),
     upAxis: state.upAxis,
     partOffsets: Object.fromEntries(state.partOffsets),
     partRotations: Object.fromEntries(state.partRotations),
-    jobs: state.jobs.map(({ id, ...job }) => ({ ...job, explode: cloneExplode(job.explode) })),
+    jobs: state.jobs.map(({ id, explode, ...job }) => ({ ...job })),
     sections: state.sections.map(({ name, axis, position, flip, enabled, uncut }) => ({
       name,
       axis,
@@ -325,6 +319,7 @@ function modelSnapshot() {
     sectionCap: { ...state.sectionCap },
     hidden: state.parts.filter((part) => !part.mesh.visible).map((part) => part.id),
     removed: state.parts.filter((part) => part.removed).map((part) => part.id),
+    addedFiles: state.addedFiles.map((entry) => ({ ...entry })),
     view: viewProvider(),
   };
 }
@@ -422,7 +417,6 @@ export function applyModelData(record) {
     id: newId(),
     ...view,
     name: englishName(view.name),
-    explode: sanitizeExplode(view.explode),
   }));
   state.explode = sanitizeExplode(record.explode);
   state.upAxis = UP_AXES[record.upAxis] ? record.upAxis : '+Z';
@@ -625,6 +619,9 @@ export async function duplicateProject(id) {
   // Renderings stay with the original; their images are large.
   record.renders = [];
   await files.copy(fileKeys.step(source.id), fileKeys.step(record.id));
+  for (let i = 0; i < addedFileCount(source); i++) {
+    await files.copy(fileKeys.addedStep(source.id, i), fileKeys.addedStep(record.id, i));
+  }
   await files.copy(fileKeys.hdri(source.id), fileKeys.hdri(record.id));
   await files.copy(fileKeys.thumbnail(source.id), fileKeys.thumbnail(record.id));
   record.modifiedAt = Date.now();
@@ -639,6 +636,7 @@ export function deleteProject(id) {
   const record = getProject(id);
   index.projects = index.projects.filter((project) => project.id !== id);
   files.delete(fileKeys.step(id));
+  for (let i = 0; i < addedFileCount(record); i++) files.delete(fileKeys.addedStep(id, i));
   files.delete(fileKeys.hdri(id));
   files.delete(fileKeys.thumbnail(id));
   for (const meta of record?.renders || []) deleteRenderFiles(id, meta);
@@ -648,6 +646,9 @@ export function deleteProject(id) {
   syncSummaries();
   return currentRecord();
 }
+
+/** How many further STEP files a stored project has. */
+export const addedFileCount = (record) => (Array.isArray(record?.addedFiles) ? record.addedFiles.length : 0);
 
 /** The stored record of a project, as it is written to a project file. */
 export function getProject(id) {
@@ -683,13 +684,14 @@ export function updateRenderMeta(projectId, key, changes) {
  * project, coming back from another computer). Otherwise it is added, under
  * a new id if that one is taken, and under a free name.
  */
-export async function importProject(data, { step, hdri, replace }) {
+export async function importProject(data, { step, added = [], hdri, replace }) {
   const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : 'Imported project';
   // Project files carry no renderings.
   const record = { ...blankRecord(name), ...data, name, renders: [] };
   const existing = replace ? getProject(data.id) : null;
   if (existing) {
     for (const meta of existing.renders || []) deleteRenderFiles(existing.id, meta);
+    for (let i = 0; i < addedFileCount(existing); i++) await files.delete(fileKeys.addedStep(existing.id, i));
     index.projects = index.projects.map((project) => (project === existing ? record : project));
   } else {
     if (typeof data.id !== 'string' || getProject(data.id)) record.id = uid();
@@ -701,6 +703,12 @@ export async function importProject(data, { step, hdri, replace }) {
   }
   if (step) await files.put(fileKeys.step(record.id), step);
   else await files.delete(fileKeys.step(record.id));
+  // Parts added from further files come back only if all of their files came along.
+  if (added.length === addedFileCount(record)) {
+    for (const [i, file] of added.entries()) await files.put(fileKeys.addedStep(record.id, i), file);
+  } else {
+    record.addedFiles = [];
+  }
   if (hdri) await files.put(fileKeys.hdri(record.id), hdri);
   else await files.delete(fileKeys.hdri(record.id));
   write(PROJECTS_KEY, index);

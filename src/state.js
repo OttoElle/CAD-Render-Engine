@@ -131,6 +131,8 @@ export const state = {
   fileName: null,
   /** Parts of the model; a part the user deleted stays in the list with `removed` set, so ids stay stable. */
   parts: [],
+  /** STEP files whose parts were added to the model after the first one: { name, partCount }, in order. */
+  addedFiles: [],
   /** Ids of the parts whose panel is open; several when parts are picked with Ctrl or Shift. */
   selectedParts: new Set(),
   /**
@@ -270,6 +272,7 @@ export function resetForModel(fileName, parts) {
   state.partOffsets = new Map();
   state.partRotations = new Map();
   state.selectedParts = new Set();
+  state.addedFiles = [];
   state.views = [];
   state.jobs = [];
 }

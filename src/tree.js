@@ -5,7 +5,6 @@ import { state, select, materialEntryLabel, presentParts, BACKGROUND_COLORS } fr
 import { getLightPreset } from './environment.js';
 import { FILE_FORMATS } from './export.js';
 import { hasExplode } from './explode.js';
-import { MATERIALS, MATERIAL_GROUPS } from './materials.js';
 
 /** Keys of nodes whose children are folded away. */
 const collapsed = new Set();
@@ -50,8 +49,17 @@ export function renderTree(container, actions) {
   });
   const more = (items) => ({ icon: 'more', title: 'More', menu: items });
   const remove = (label, run) => ({ label, icon: 'trash', danger: true, run });
-  /** The + of a category: a menu of what can be added there. */
-  const addMenu = (title, items) => ({ icon: 'plus', title, add: true, menu: items });
+  /**
+   * The + of a category. With several things to add it opens a menu; with
+   * one it adds that right away; with nothing to add there is no +. Choices
+   * an entry's panel offers anyway (which axis, which material) are made there.
+   */
+  const addButton = (title, items) => {
+    const list = items.filter(Boolean);
+    if (list.length === 0) return null;
+    if (list.length === 1) return { icon: 'plus', title: list[0].title || `Add ${list[0].label.toLowerCase()}`, add: true, run: list[0].run };
+    return { icon: 'plus', title, add: true, menu: list };
+  };
 
   const renderDetail = (render) =>
     render.status === 'running'
@@ -72,26 +80,11 @@ export function renderTree(container, actions) {
       label: 'Geometry',
       icon: 'cube',
       actions: [
-        loaded
-          ? addMenu('Add to the geometry', () => [
-              {
-                label: 'Section plane',
-                icon: 'slice',
-                items: [
-                  { label: 'Facing the camera', run: () => actions.addSection() },
-                  null,
-                  ...['X', 'Y', 'Z'].map((axis, i) => ({ label: `Across ${axis}`, run: () => actions.addSection(i) })),
-                ],
-              },
-              {
-                label: 'Exploded view',
-                icon: 'explode',
-                disabled: parts.length < 2 || hasExplode(state.explode),
-                hint: hasExplode(state.explode) ? 'Already added' : parts.length < 2 ? 'Needs an assembly of several parts' : null,
-                run: actions.addExplode,
-              },
-            ])
-          : { icon: 'plus', title: 'Open STEP file', run: actions.openFile, add: true },
+        addButton('Add to the geometry', [
+          { label: 'Part', title: loaded ? 'Add a part from a STEP file' : 'Open a STEP file', icon: 'part', run: actions.addPart },
+          loaded ? { label: 'Section', icon: 'slice', run: () => actions.addSection() } : null,
+          parts.length > 1 && !hasExplode(state.explode) ? { label: 'Exploded view', icon: 'explode', run: actions.addExplode } : null,
+        ]),
       ],
       children: [
         {
@@ -161,18 +154,7 @@ export function renderTree(container, actions) {
       category: true,
       label: 'Materials',
       icon: 'palette',
-      actions: [
-        addMenu('Add material', () =>
-          Object.entries(MATERIAL_GROUPS).map(([groupId, label]) => ({
-            label,
-            items: MATERIALS.filter((item) => item.group === groupId).map((item) => ({
-              label: item.label,
-              swatch: item.color,
-              run: () => actions.addMaterial(item.id),
-            })),
-          })),
-        ),
-      ],
+      actions: [addButton('Add material', [{ label: 'Material', run: () => actions.addMaterial() }])],
       children: [
         {
           key: 'material:cad',
@@ -199,15 +181,9 @@ export function renderTree(container, actions) {
       label: 'Scene',
       icon: 'scene',
       actions: [
-        addMenu('Add to the scene', () =>
-          ['shadow', 'cove'].map((floor) => ({
-            label: floor === 'shadow' ? 'Flat floor' : 'Cove (curves up behind the model)',
-            icon: 'floor',
-            disabled: state.scene.floor !== 'none',
-            hint: state.scene.floor !== 'none' ? 'The scene has a floor already' : null,
-            run: () => actions.addFloor(floor),
-          })),
-        ),
+        addButton('Add to the scene', [
+          state.scene.floor === 'none' ? { label: 'Floor', run: () => actions.addFloor('shadow') } : null,
+        ]),
       ],
       children: [
         { key: 'scene:background', label: 'Background', icon: 'background', detail: backgroundName(state.scene) },
@@ -228,15 +204,7 @@ export function renderTree(container, actions) {
       category: true,
       label: 'Lighting',
       icon: 'lamp',
-      actions: [
-        addMenu('Add light', () => [
-          { label: 'Softbox', icon: 'softbox', run: () => actions.addLight('softbox') },
-          { label: 'Strip light', icon: 'softbox', run: () => actions.addLight('strip') },
-          { label: 'Round softbox', icon: 'softbox', run: () => actions.addLight('round') },
-          null,
-          { label: 'HDRI file …', icon: 'upload', run: actions.loadHdri },
-        ]),
-      ],
+      actions: [addButton('Add light', [{ label: 'Softbox', run: () => actions.addLight() }])],
       children: [
         {
           key: 'lighting',
@@ -263,15 +231,9 @@ export function renderTree(container, actions) {
       label: 'Camera',
       icon: 'camera',
       actions: [
-        addMenu('Add to the camera', () => [
-          { label: 'Saved view (as it is now)', icon: 'bookmark', run: actions.addView },
-          {
-            label: 'Depth of field',
-            icon: 'target',
-            disabled: state.camera.dof,
-            hint: state.camera.dof ? 'Already added' : null,
-            run: actions.addDepthOfField,
-          },
+        addButton('Add to the camera', [
+          { label: 'Saved view', title: 'Save the current view', icon: 'bookmark', run: actions.addView },
+          state.camera.dof ? null : { label: 'Depth of field', icon: 'target', run: actions.addDepthOfField },
         ]),
       ],
       children: [
@@ -305,18 +267,12 @@ export function renderTree(container, actions) {
         state.jobs.length > 0 && actions.renderSupported
           ? { icon: 'play', title: state.jobs.length > 1 ? `Render all ${state.jobs.length} jobs` : 'Render the job', run: actions.renderAllJobs }
           : null,
-        {
-          icon: 'plus',
-          title: 'Add render job',
-          add: true,
-          menu: () => [
-            { label: 'Image', icon: 'image', run: () => actions.addJob('image') },
-            { label: 'Turntable', icon: 'film', run: actions.addAnimationJob },
-            state.views.length > 0
-              ? { label: `One image per saved view (${state.views.length})`, icon: 'bookmark', run: actions.jobsFromViews }
-              : null,
-          ].filter(Boolean),
-        },
+        addButton('Add render job', [
+          { label: 'Render job', icon: 'image', run: () => actions.addJob('image') },
+          state.views.length > 0
+            ? { label: `One job per saved view (${state.views.length})`, icon: 'bookmark', run: actions.jobsFromViews }
+            : null,
+        ]),
       ],
       empty: 'No render jobs yet',
       children: state.jobs.map((job) => {

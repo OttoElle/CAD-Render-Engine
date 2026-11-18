@@ -500,31 +500,7 @@ export class Viewer {
     this.sections = [];
     this._sectionHelper.visible = false;
     this.modelBox.makeEmpty();
-    for (const part of parts) {
-      part.caps = [];
-      part.worldPlanes = [];
-      if (!part.mesh.geometry.boundingBox) part.mesh.geometry.computeBoundingBox();
-      this.modelBox.union(part.mesh.geometry.boundingBox);
-      part.mesh.userData.partId = part.id;
-      part.mesh.castShadow = true;
-      // Prefer the real CAD edges from the importer; fall back to crease detection.
-      let edgeGeometry;
-      if (part.edgePositions) {
-        edgeGeometry = new THREE.BufferGeometry();
-        edgeGeometry.setAttribute('position', new THREE.BufferAttribute(part.edgePositions, 3));
-      } else {
-        edgeGeometry = new THREE.EdgesGeometry(part.mesh.geometry, 30);
-      }
-      const edges = new THREE.LineSegments(
-        edgeGeometry,
-        new THREE.LineBasicMaterial({ color: 0x0c0d10, transparent: true, opacity: 0.5 }),
-      );
-      edges.raycast = () => {};
-      edges.visible = this.edgesVisible;
-      part.mesh.add(edges);
-      part.edges = edges;
-      this.modelRoot.add(part.mesh);
-    }
+    for (const part of parts) this._addPart(part);
 
     this._updateBounds();
     this._updateShadowSetup();
@@ -532,6 +508,42 @@ export class Viewer {
 
     this.roll = 0;
     this.setView('iso');
+  }
+
+  /** Adds parts to the model, e.g. from a further STEP file; the camera stays where it is. */
+  addParts(parts) {
+    for (const part of parts) this._addPart(part);
+    this._updateBounds();
+    this._updateShadowSetup();
+    this._sizeAxes();
+    this._capsDirty = true;
+    this.requestRender();
+  }
+
+  _addPart(part) {
+    part.caps = [];
+    part.worldPlanes = [];
+    if (!part.mesh.geometry.boundingBox) part.mesh.geometry.computeBoundingBox();
+    this.modelBox.union(part.mesh.geometry.boundingBox);
+    part.mesh.userData.partId = part.id;
+    part.mesh.castShadow = true;
+    // Prefer the real CAD edges from the importer; fall back to crease detection.
+    let edgeGeometry;
+    if (part.edgePositions) {
+      edgeGeometry = new THREE.BufferGeometry();
+      edgeGeometry.setAttribute('position', new THREE.BufferAttribute(part.edgePositions, 3));
+    } else {
+      edgeGeometry = new THREE.EdgesGeometry(part.mesh.geometry, 30);
+    }
+    const edges = new THREE.LineSegments(
+      edgeGeometry,
+      new THREE.LineBasicMaterial({ color: 0x0c0d10, transparent: true, opacity: 0.5 }),
+    );
+    edges.raycast = () => {};
+    edges.visible = this.edgesVisible;
+    part.mesh.add(edges);
+    part.edges = edges;
+    this.modelRoot.add(part.mesh);
   }
 
   /**

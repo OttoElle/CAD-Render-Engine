@@ -44,6 +44,10 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
   löschen und mehrere zusammen auswählen, kombiniertes Werkzeug zum
   Verschieben und Drehen mit Werteingabe im Viewport, Schraffur auf
   Schnittflächen, einstellbarer Bodenschatten
+- [x] **Schritt 18:** Ein Weg pro Einstellung: Plus nur mit sinnvollen
+  Optionen (bei einer direkt hinzufügen), weitere Bauteile aus STEP-Dateien
+  hinzufügen, Explosionsansicht nur noch unter Geometry, Hilfslinien nur in der
+  Werkzeugleiste, Material nur im Material-Panel zuweisen
 
 ## Ablauf
 
@@ -66,11 +70,15 @@ App in der Übersicht.
 
 Die schwebende Seitenleiste zeigt das Projekt als Baum. Die Kategorien
 (Geometry, Materials, Scene, Lighting, Camera, Output, Renders) sind nur
-Überschriften: ein Klick klappt sie auf und zu, das Plus öffnet ein Menü mit
-allem, was sich dort hinzufügen lässt (mit Untermenüs, z. B. Materialien nach
-Gruppen). Angelegt ist nur, was jedes Projekt braucht (Hintergrund,
-Lichtvorlage, Objektiv, CAD-Farben); alles andere kommt über das Plus dazu und
-lässt sich über „⋯“ oder „Remove“ unten im Panel wieder entfernen. Ein
+Überschriften: ein Klick klappt sie auf und zu, das Plus fügt etwas hinzu.
+Gibt es dort mehrere Dinge, öffnet es ein kleines Menü, bei einem fügt es
+direkt hinzu, und wo nichts dazukommen kann, fehlt es. Was ein Eintrag in
+seinem Panel ohnehin einstellt (Achse eines Schnitts, Art des Materials,
+Bodenform, Bild oder Drehteller), fragt das Plus nicht vorher ab: jede
+Einstellung hat genau einen Ort. Angelegt ist nur, was jedes Projekt braucht
+(Hintergrund, Lichtvorlage, Objektiv, CAD-Farben); alles andere kommt über das
+Plus dazu und lässt sich über „⋯“ oder „Remove“ unten im Panel wieder
+entfernen. Ein
 Play-Symbol bei Output rendert alle Jobs, das Download-Symbol bei Renders
 speichert alle Bilder. Ein Klick auf einen Eintrag öffnet seine Einstellungen
 daneben. Beim Überfahren zeigen Einträge ihre Schnellaktionen: Auge zum Ein-
@@ -90,8 +98,9 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
    Drag-and-drop); dieser Eintrag enthält auch Hochachse und Achsen. Darunter
    stehen die Bauteile (Parts) und, wenn hinzugefügt, die Explosionsansicht
    (Exploded view: Abstand, Richtung und ein Bauteil als Zentrum) und die
-   Schnitte; das Plus fügt einen Schnitt (zur Kamera hin oder quer zu X, Y, Z)
-   oder die Explosionsansicht hinzu. Bauteile lassen sich im Baum oder direkt
+   Schnitte. Das Plus fügt ein Bauteil aus einer weiteren STEP-Datei hinzu
+   (es wird mit dem Projekt gespeichert und exportiert), einen Schnitt oder die
+   Explosionsansicht; sie gilt für die Ansicht und alle Renderings. Bauteile lassen sich im Baum oder direkt
    im Modell anklicken; unter dem Mauszeiger leuchten sie auf. Mit Strg oder
    Shift gedrückt kommen weitere Bauteile zur Auswahl dazu oder fallen wieder
    heraus; das Panel gilt dann für alle zusammen (Material, Ein- und
@@ -115,8 +124,9 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
    abwechselnd um 90° gedrehte Linien wie in einer technischen Zeichnung). Die
    Schraffur erscheint auch im Rendering. Ein Klick auf ein Bauteil im Modell
    nimmt es vom Schnitt aus oder schneidet es wieder.
-2. **Materialien (Materials):** Das Plus legt ein Material aus der Bibliothek
-   an (Metall, Kunststoff, Lack und Beschichtung, Glas und Sonstiges). Bauteile
+2. **Materialien (Materials):** Das Plus legt ein Material an; welches aus der
+   Bibliothek (Metall, Kunststoff, Lack und Beschichtung, Glas und Sonstiges),
+   wählt man im Panel. Bauteile
    werden im Modell angeklickt oder in der Liste angehakt; die zugewiesenen
    stehen als Auswahl-Box mit Entfernen-Knopf da, „Clear list“ leert sie.
    Gleiche Bauteile werden auf Wunsch gemeinsam zugewiesen. Regler für
@@ -125,14 +135,13 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
    jederzeit auf die Werte der Bibliothek zurück.
 3. **Szene (Scene):** „Background“: Farbe (hell, weiß, grau, dunkel, eigene
    Farbe oder Farbverlauf) oder Szene (die Lichtumgebung bzw. eine HDRI als
-   Hintergrund). „Floor“ (über das Plus hinzuzufügen und wieder zu entfernen):
+   Hintergrund). „Floor“ (fehlt er, fügt das Plus ihn wieder hinzu):
    Bodenform (flacher Boden oder Hohlkehle), Stärke des Schattens sowie Stärke
    und Unschärfe der Spiegelung. Wie weich der Schatten ist, bestimmen die
    Größen der Lichter.
 4. **Beleuchtung (Lighting):** „Light setup“: Lichtvorlage oder eigene
    HDRI-Datei, Drehung und Belichtung in Blendenstufen. Das Plus fügt eine
-   Softbox, ein Streiflicht (schmal und hoch) oder eine runde Softbox hinzu oder
-   lädt eine HDRI-Datei. Die Softboxen stehen als Einträge
+   Softbox hinzu; Form und Größe stellt ihr Panel ein. Die Softboxen stehen als Einträge
    darunter und lassen sich einzeln verschieben, vergrößern, färben, dimmen
    und ausschalten. „Place highlight“ legt das Glanzlicht einer Softbox auf
    den angeklickten Punkt.
@@ -140,14 +149,14 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
    in Zahlen. Das Plus speichert die aktuelle Ansicht oder fügt die
    Tiefenunschärfe (Depth of field: Blende und Fokuspunkt) hinzu.
 6. **Output:** Hier entstehen Render-Jobs. Ein Job ist ein Bild oder ein
-   Drehteller und merkt sich Kamera, Explosionsabstand, Seitenverhältnis,
+   Drehteller und merkt sich Kamera, Seitenverhältnis,
    Auflösung, Qualität, Dateiformat und Transparenz. Solange ein Job offen
    ist, nimmt er die Kamera mit, und ein Rahmen zeigt den Bildausschnitt.
-   „Guides“ oben (oder `G`) blendet Hilfslinien über dem Bildausschnitt ein:
-   Drittel, Goldener Schnitt, Raster oder Mitte und Diagonalen; die Art wird
-   im Job- und im Kamera-Panel gewählt. Die Linien erscheinen nicht im Bild.
-   Das Plus legt einen Bild- oder Drehteller-Job an (oder einen pro
-   gespeicherter Ansicht), das Play-Symbol schickt alle Jobs in die
+   „Guides“ oben wählt Hilfslinien über dem Bildausschnitt (Drittel, Goldener
+   Schnitt, Raster oder Mitte und Diagonalen) oder schaltet sie aus, `G`
+   blendet sie ein und aus. Die Linien erscheinen nicht im Bild. Das Plus legt
+   einen Job an (mit gespeicherten Ansichten wahlweise einen pro Ansicht), Bild
+   oder Drehteller wählt man im Job, das Play-Symbol schickt alle Jobs in die
    Warteschlange. Der Drehteller dreht
    das Modell einmal um die senkrechte Achse (24 bis 120 Bilder, eine Umdrehung
    in 4 bis 12 Sekunden); den Blickwinkel bestimmt die Kamerahöhe.
@@ -216,7 +225,7 @@ online also nicht und lassen sich über Projektdateien (`.clearcoat`) mitnehmen.
 | Modell einpassen | `F` |
 | Kanten ein- und ausblenden | `E` |
 | Koordinatensystem ein- und ausblenden | `A` |
-| Hilfslinien ein- und ausblenden | `G` |
+| Hilfslinien ein- und ausblenden (Art über „Guides“) | `G` |
 | Werkzeug zum Verschieben und Drehen der gewählten Bauteile | `M` |
 | Weitere Bauteile auswählen | Strg oder Shift + Klick |
 
