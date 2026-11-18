@@ -193,6 +193,15 @@ Testmodell liegt unter `samples/Bracket.step`.
 
 `npm run build` erzeugt in `dist/` eine rein statische Version der App.
 
+### Online über GitHub Pages
+
+Jeder Push auf `main` baut die App per GitHub Actions
+(`.github/workflows/pages.yml`) und veröffentlicht sie unter
+https://ottoelle.github.io/CAD-Render-Engine/. Einmalig muss dafür unter
+Settings > Pages die Quelle auf "GitHub Actions" stehen. Projekte liegen im
+Browser-Speicher der jeweiligen Adresse; Projekte von `localhost` erscheinen
+online also nicht und lassen sich über Projektdateien (`.clearcoat`) mitnehmen.
+
 ## Bedienung der Ansicht
 
 | Aktion | Eingabe |
