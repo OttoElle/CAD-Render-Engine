@@ -48,6 +48,11 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
   Optionen (bei einer direkt hinzufügen), weitere Bauteile aus STEP-Dateien
   hinzufügen, Explosionsansicht nur noch unter Geometry, Hilfslinien nur in der
   Werkzeugleiste, Material nur im Material-Panel zuweisen
+- [x] **Schritt 19:** Ladeanzeige mit Fortschrittsbalken, Werte in allen
+  Reglern direkt eintippen, Material und Oberfläche getrennt wählen,
+  Schraffur mit Linienbreite, automatischer Kontrastfarbe und Umrandung der
+  Schnittflächen, überlappende Bauteile im Schnitt rot markiert, Kantenlinien
+  im Rendering, Bild oder Drehteller direkt über das Plus bei Output
 
 ## Ablauf
 
@@ -119,19 +124,31 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
    Baugruppe, wie sie ausgerichtet ist; verschobene und gedrehte Bauteile
    werden in derselben Ebene geschnitten wie alle anderen. Ein Schnitt liegt senkrecht zu einer Achse und ist per Regler verschiebbar.
    Die Schnittflächen werden geschlossen, im Material des Bauteils oder in
-   eigener Farbe, auf Wunsch schraffiert (Linien oder gekreuzt, mit
-   Linienfarbe, Abstand in mm und Winkel; benachbarte Bauteile bekommen
-   abwechselnd um 90° gedrehte Linien wie in einer technischen Zeichnung). Die
-   Schraffur erscheint auch im Rendering. Ein Klick auf ein Bauteil im Modell
-   nimmt es vom Schnitt aus oder schneidet es wieder.
-2. **Materialien (Materials):** Das Plus legt ein Material an; welches aus der
-   Bibliothek (Metall, Kunststoff, Lack und Beschichtung, Glas und Sonstiges),
-   wählt man im Panel. Bauteile
+   eigener Farbe, auf Wunsch schraffiert (Linien oder gekreuzt, mit Abstand,
+   Linienbreite in mm und Winkel; benachbarte Bauteile bekommen abwechselnd um
+   90° gedrehte Linien wie in einer technischen Zeichnung). Die Linienfarbe ist
+   entweder ein dunklerer Ton der Schnittfläche (auf dunklen Teilen ein
+   hellerer), z. B. dunkelblau auf einem blauen Teil, oder eine eigene Farbe.
+   Schraffierte Schnittflächen bekommen eine Umrandung entlang ihrer Kanten.
+   Wo sich zwei Bauteile im CAD-Modell überschneiden (z. B. ein Gewinde, das
+   größer gezeichnet ist als die Kernlochbohrung), wird die Überlappung im
+   Schnitt rot markiert, statt dass mal das eine, mal das andere Teil
+   durchscheint. Bauteile, die sich nur berühren, bleiben unmarkiert. Schraffur,
+   Umrandung und Markierung erscheinen auch im Rendering. Ein Klick auf ein
+   Bauteil im Modell nimmt es vom Schnitt aus oder schneidet es wieder.
+2. **Materialien (Materials):** Das Plus legt ein Material an. Im Panel wählt
+   man den Werkstoff (Aluminium, Stahl, Edelstahl, Guss, Titan, Messing,
+   Kupfer, Gold, Kunststoff, klarer Kunststoff, Gummi, Lack, Glas, Keramik) und
+   getrennt davon seine Oberfläche (bei Metallen z. B. satiniert, poliert,
+   gestrahlt, gebürstet, gedreht, dazu eloxiert bei Aluminium oder brüniert,
+   verzinkt und verchromt bei Stahl). Ältere Projekte mit Materialien wie
+   „Aluminium gebürstet“ öffnen mit dem passenden Werkstoff und der passenden
+   Oberfläche. Bauteile
    werden im Modell angeklickt oder in der Liste angehakt; die zugewiesenen
    stehen als Auswahl-Box mit Entfernen-Knopf da, „Clear list“ leert sie.
    Gleiche Bauteile werden auf Wunsch gemeinsam zugewiesen. Regler für
-   Rauheit, Metallisch und Klarlack sowie gebürstete und gedrehte Oberflächen
-   passen jedes Material an; „Reset to defaults“ setzt Farbe und Regler
+   Rauheit, Metallisch und Klarlack sowie Richtung und Stärke bei gebürsteten
+   und gedrehten Oberflächen passen jedes Material an; „Reset to defaults“ setzt Farbe und Regler
    jederzeit auf die Werte der Bibliothek zurück.
 3. **Szene (Scene):** „Background“: Farbe (hell, weiß, grau, dunkel, eigene
    Farbe oder Farbverlauf) oder Szene (die Lichtumgebung bzw. eine HDRI als
@@ -155,9 +172,12 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
    „Guides“ oben wählt Hilfslinien über dem Bildausschnitt (Drittel, Goldener
    Schnitt, Raster oder Mitte und Diagonalen) oder schaltet sie aus, `G`
    blendet sie ein und aus. Die Linien erscheinen nicht im Bild. Das Plus legt
-   einen Job an (mit gespeicherten Ansichten wahlweise einen pro Ansicht), Bild
-   oder Drehteller wählt man im Job, das Play-Symbol schickt alle Jobs in die
-   Warteschlange. Der Drehteller dreht
+   einen Job an: ein Bild (Image), einen Drehteller (Turntable) oder, mit
+   gespeicherten Ansichten, ein Bild pro Ansicht. Das Play-Symbol schickt alle
+   Jobs in die Warteschlange. Unter „Edge lines“ bekommt ein Job auf Wunsch
+   Kantenlinien wie in einer CAD-Ansicht (CAD-Kanten und Umrisse der
+   Schnittflächen, verdeckte Kanten bleiben unsichtbar), mit Farbe und
+   Linienbreite; sie werden nach dem Rendern über das Bild gelegt. Der Drehteller dreht
    das Modell einmal um die senkrechte Achse (24 bis 120 Bilder, eine Umdrehung
    in 4 bis 12 Sekunden); den Blickwinkel bestimmt die Kamerahöhe.
 7. **Renderings (Renders):** Fertige Bilder bleiben mit dem Projekt
@@ -241,8 +261,11 @@ Die fünf Tastenkürzel lassen sich unter dem Zahnrad oben rechts ändern.
 - `src/viewer.js` ist die Echtzeit-Ansicht (WebGL) mit Kamera, Boden,
   Bildausschnitt und Achsen, `src/cad-controls.js` die
   Maussteuerung, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.
-- `src/section.js` schneidet Geometrie an Ebenen und schließt die Schnittflächen,
-  `src/hatch.js` schraffiert sie.
+- `src/section.js` schneidet Geometrie an Ebenen, schließt die Schnittflächen
+  und umrandet sie, `src/hatch.js` schraffiert sie, `src/overlap.js` findet
+  überlappende Schnittflächen verschiedener Bauteile.
+- `src/edge-overlay.js` zeichnet die Kantenlinien für ein Rendering,
+  `src/loading.js` die Ladeanzeige beim Öffnen einer STEP-Datei.
 - `src/manipulator.js` ist das Werkzeug zum Verschieben und Drehen im Viewport.
 - `src/backdrop.js` baut Boden, Hohlkehle und Farbverläufe für Ansicht und Rendering.
 - `src/explode.js` berechnet die Verschiebungen der Explosionsansicht.

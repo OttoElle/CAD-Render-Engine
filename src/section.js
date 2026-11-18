@@ -374,5 +374,90 @@ export function buildCap(geometry, plane, offset = 0) {
     normals[i + 2] = -nz;
   }
   result.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  // Kept for drawing the outlines of the cut faces (see buildCapOutline).
+  result.userData.outline = { loops, u, v, normal: normal.clone(), constant };
   return result;
+}
+
+/**
+ * A thin band along every outline of a cap, inside the cut face, like the
+ * border of a cut face in a CAD drawing. A band of triangles rather than
+ * lines, so it shows in the path-traced rendering as well. `offset` places it
+ * at that distance from the plane on the kept side, just in front of the cap.
+ */
+export function buildCapOutline(cap, width, offset = 0) {
+  const outline = cap?.userData.outline;
+  if (!outline || !(width > 0)) return null;
+  const { loops, u, v, normal, constant } = outline;
+  const origin = normal.clone().multiplyScalar(offset - constant);
+  const out = [];
+  const put = (x, y) => out.push(origin.x + u.x * x + v.x * y, origin.y + u.y * x + v.y * y, origin.z + u.z * x + v.z * y);
+
+  for (const loop of loops) {
+    const p = loop.polygon;
+    const n = p.length / 2;
+    if (n < 3) continue;
+    // The cut face lies left of a counter-clockwise outer outline and right of a counter-clockwise hole.
+    const side = (signedArea(p) > 0) === (loop.depth % 2 === 0) ? 1 : -1;
+    // Each corner moves inwards along the mitre of its two edges, limited at sharp corners.
+    const inner = new Float64Array(n * 2);
+    for (let i = 0; i < n; i += 1) {
+      const prev = (i - 1 + n) % n;
+      const next = (i + 1) % n;
+      let ax = p[i * 2] - p[prev * 2];
+      let ay = p[i * 2 + 1] - p[prev * 2 + 1];
+      let bx = p[next * 2] - p[i * 2];
+      let by = p[next * 2 + 1] - p[i * 2 + 1];
+      const la = Math.hypot(ax, ay) || 1;
+      const lb = Math.hypot(bx, by) || 1;
+      ax /= la;
+      ay /= la;
+      bx /= lb;
+      by /= lb;
+      // Left normals of both edges, averaged.
+      let mx = -ay - by;
+      let my = ax + bx;
+      const lm = Math.hypot(mx, my);
+      if (lm < 1e-9) {
+        mx = -ay;
+        my = ax;
+      } else {
+        mx /= lm;
+        my /= lm;
+      }
+      const cos = Math.max(mx * -ay + my * ax, 0.35);
+      const reach = Math.min(width / cos, Math.min(la, lb) * 4 + width);
+      inner[i * 2] = p[i * 2] + side * mx * reach;
+      inner[i * 2 + 1] = p[i * 2 + 1] + side * my * reach;
+    }
+    for (let i = 0; i < n; i += 1) {
+      const j = (i + 1) % n;
+      const ox0 = p[i * 2];
+      const oy0 = p[i * 2 + 1];
+      const ox1 = p[j * 2];
+      const oy1 = p[j * 2 + 1];
+      const ix0 = inner[i * 2];
+      const iy0 = inner[i * 2 + 1];
+      const ix1 = inner[j * 2];
+      const iy1 = inner[j * 2 + 1];
+      // Two triangles per edge; the band's material is double-sided.
+      put(ox0, oy0);
+      put(ox1, oy1);
+      put(ix1, iy1);
+      put(ox0, oy0);
+      put(ix1, iy1);
+      put(ix0, iy0);
+    }
+  }
+  if (out.length === 0) return null;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(out), 3));
+  const normals = new Float32Array(out.length);
+  for (let i = 0; i < normals.length; i += 3) {
+    normals[i] = -normal.x;
+    normals[i + 1] = -normal.y;
+    normals[i + 2] = -normal.z;
+  }
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  return geometry;
 }

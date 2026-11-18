@@ -268,9 +268,10 @@ export function renderTree(container, actions) {
           ? { icon: 'play', title: state.jobs.length > 1 ? `Render all ${state.jobs.length} jobs` : 'Render the job', run: actions.renderAllJobs }
           : null,
         addButton('Add render job', [
-          { label: 'Render job', icon: 'image', run: () => actions.addJob('image') },
+          { label: 'Image', icon: 'image', run: () => actions.addJob('image') },
+          { label: 'Turntable', icon: 'film', run: () => actions.addJob('animation') },
           state.views.length > 0
-            ? { label: `One job per saved view (${state.views.length})`, icon: 'bookmark', run: actions.jobsFromViews }
+            ? { label: `One image per saved view (${state.views.length})`, icon: 'bookmark', run: actions.jobsFromViews }
             : null,
         ]),
       ],

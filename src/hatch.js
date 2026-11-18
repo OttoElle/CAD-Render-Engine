@@ -12,15 +12,13 @@ export const HATCH_PATTERNS = {
   cross: 'Cross',
 };
 
-const TEXTURE_SIZE = 64;
-/** Share of the spacing a line is wide. */
-const LINE_WIDTH = 0.14;
+const TEXTURE_SIZE = 128;
 
 const textures = new Map();
 
 /** A tile with the line(s) of one period over the base colour; shared between parts of the same colours. */
-function hatchTexture(base, line, pattern) {
-  const key = `${base}|${line}|${pattern}`;
+function hatchTexture(base, line, pattern, share) {
+  const key = `${base}|${line}|${pattern}|${share}`;
   if (textures.has(key)) return textures.get(key);
   const canvas = document.createElement('canvas');
   canvas.width = TEXTURE_SIZE;
@@ -29,7 +27,7 @@ function hatchTexture(base, line, pattern) {
   context.fillStyle = base;
   context.fillRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
   context.fillStyle = line;
-  const width = Math.max(Math.round(TEXTURE_SIZE * LINE_WIDTH), 1);
+  const width = Math.max(Math.round(TEXTURE_SIZE * share), 1);
   context.fillRect(0, 0, TEXTURE_SIZE, width);
   if (pattern === 'cross') context.fillRect(0, 0, width, TEXTURE_SIZE);
   const texture = new THREE.CanvasTexture(canvas);
@@ -78,6 +76,42 @@ export function applyHatchUv(geometry, plane, spacing, angleDegrees) {
   geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 }
 
+/**
+ * A shade of a colour that stands out on it without being harsh: darker on
+ * light and mid colours (dark blue lines on a blue part), lighter on dark ones.
+ */
+export function contrastColor(hex) {
+  const color = new THREE.Color(hex);
+  const hsl = color.getHSL({});
+  const lightness = hsl.l > 0.28 ? hsl.l * 0.45 : Math.min(hsl.l + 0.32, 0.85);
+  return `#${color.setHSL(hsl.h, Math.min(hsl.s * 1.1, 1), lightness).getHexString()}`;
+}
+
+/** Colour of the lines and outlines on a cut face of the given colour. */
+export function hatchLineColor(capStyle, faceColor) {
+  return capStyle.hatchAuto ? contrastColor(faceColor) : capStyle.hatchColor;
+}
+
+/** Width of the outline along the edges of a cut face, in mm: a little wider than a hatching line. */
+export function outlineWidth(capStyle, box) {
+  return hatchSpacing(capStyle, box) * capStyle.hatchWidth * 1.4;
+}
+
+/** Whether cut faces get an outline: only with hatching, as in a drawing. */
+export const hasOutline = (capStyle) => capStyle.outline && capStyle.hatch !== 'none' && Boolean(HATCH_PATTERNS[capStyle.hatch]);
+
+/** Material of the outline band of a cut face. */
+export function createOutlineMaterial(capStyle, faceColor) {
+  return new THREE.MeshPhysicalMaterial({
+    color: hatchLineColor(capStyle, faceColor),
+    roughness: 0.6,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+}
+
 /** Angle of the lines on a part: every other part turned by 90°, if the user wants that. */
 export function hatchAngleFor(capStyle, partId) {
   return capStyle.hatchAlternate && partId % 2 === 1 ? capStyle.hatchAngle + 90 : capStyle.hatchAngle;
@@ -94,7 +128,7 @@ export function createCapMaterial(capStyle, partMaterial, partColor) {
     return new THREE.MeshPhysicalMaterial({ color: capStyle.color, roughness: 0.6, side: THREE.DoubleSide });
   }
   const base = capStyle.mode === 'color' ? capStyle.color : partColor;
-  const map = hatchTexture(base, capStyle.hatchColor, capStyle.hatch);
+  const map = hatchTexture(base, hatchLineColor(capStyle, base), capStyle.hatch, capStyle.hatchWidth ?? 0.14);
   if (capStyle.mode === 'color') {
     return new THREE.MeshPhysicalMaterial({ color: 0xffffff, map, roughness: 0.6, side: THREE.DoubleSide });
   }

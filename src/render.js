@@ -4,7 +4,9 @@ import { keepRunningInBackground } from './background.js';
 import { PhysicalCamera } from 'three-gpu-pathtracer/src/objects/PhysicalCamera.js';
 import { initUNetFromURL } from 'oidn-webgpu';
 import { fovToFocalLength } from './viewer.js';
-import { boxSide, buildCap, clipGeometry } from './section.js';
+import { renderEdgeOverlay } from './edge-overlay.js';
+import { boxSide, buildCap, buildCapOutline, clipGeometry } from './section.js';
+import { buildOverlaps, createOverlapMaterial, overlapTolerance } from './overlap.js';
 import { applyFinishTangents } from './materials.js';
 import {
   buildFloorGeometry,
@@ -18,7 +20,7 @@ import {
   environmentSampler,
   coveAlbedo,
 } from './backdrop.js';
-import { createCapMaterial, applyHatchUv, hatchAngleFor, hatchSpacing } from './hatch.js';
+import { createCapMaterial, createOutlineMaterial, applyHatchUv, hatchAngleFor, hatchSpacing, hasOutline, outlineWidth } from './hatch.js';
 
 // Open Image Denoise model, shipped with the app so rendering works offline.
 const DENOISE_WEIGHTS_URL = `${import.meta.env.BASE_URL}oidn/rt_hdr_alb_nrm_small.tza`;
@@ -32,6 +34,8 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
 
   const root = new THREE.Group();
   root.rotation.copy(viewer.modelRoot.rotation);
+  /** Untrimmed caps per section, for marking overlapping parts. */
+  const bySection = new Map(viewer.sections.map((section) => [section, []]));
   for (const part of viewer.parts) {
     if (!part.mesh.visible) continue;
     const material = part.mesh.material.clone();
@@ -44,6 +48,8 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
     const sides = planes.map((plane) => boxSide(source.boundingBox, plane));
     if (sides.includes(-1)) continue; // cut away completely
     const cutting = planes.filter((plane, i) => sides[i] === 0);
+    const cutBy = viewer.sections.filter((section) => !section.uncut.has(part.id)).filter((section, i) => sides[i] === 0);
+    part.mesh.updateMatrix();
     // Moved, turned or exploded parts take their cut faces along.
     const add = (mesh) => {
       mesh.position.copy(part.mesh.position);
@@ -70,22 +76,54 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
     // Close the cut faces, each cap trimmed by the other planes.
     const capMaterial = createCapMaterial(viewer.capStyle, material, part.colorHex || '#c9ced6') || material;
     const hatched = viewer.capStyle.hatch !== 'none';
-    for (const plane of cutting) {
+    const capStyle = viewer.capStyle;
+    const outlineMaterial = hasOutline(capStyle)
+      ? createOutlineMaterial(capStyle, capStyle.mode === 'color' ? capStyle.color : part.colorHex || '#c9ced6')
+      : null;
+    for (const [index, plane] of cutting.entries()) {
       let cap = buildCap(source, plane);
+      const collected = Boolean(cap) && viewer.capStyle.overlaps !== false && part.mesh.visible;
+      if (collected) bySection.get(cutBy[index])?.push({ geometry: cap, matrix: part.mesh.matrix, partId: part.id });
+      // The border of the cut face, a hair in front of it.
+      let band = outlineMaterial && cap ? buildCapOutline(cap, outlineWidth(capStyle, viewer.modelBox), -viewer.bounds.radius * 1e-4) : null;
       if (cap && cutting.length > 1) {
-        const trimmed = clipGeometry(
-          cap,
-          cutting.filter((other) => other !== plane),
-        );
-        cap.dispose();
-        cap = trimmed;
+        const others = cutting.filter((other) => other !== plane);
+        const untrimmed = cap;
+        cap = clipGeometry(untrimmed, others);
+        // Still needed for the overlaps, then disposed below.
+        if (collected) untrimmed.userData.disposeAfterOverlaps = true;
+        else untrimmed.dispose();
+        if (band) {
+          const trimmedBand = clipGeometry(band, others);
+          band.dispose();
+          band = trimmedBand;
+        }
       }
+      if (band) own(new THREE.Mesh(band, outlineMaterial));
       if (!cap) continue;
       if (hatched) applyHatchUv(cap, plane, hatchSpacing(viewer.capStyle, viewer.modelBox), hatchAngleFor(viewer.capStyle, part.id));
       else if (capMaterial === material) finish?.(cap);
       own(new THREE.Mesh(cap, capMaterial));
     }
   }
+
+  // Overlapping parts show red on their cut faces, in front of caps and outlines.
+  const tolerance = overlapTolerance(viewer.modelBox);
+  const overlapMaterial = createOverlapMaterial();
+  for (const [section, caps] of bySection) {
+    const onPlane = caps.filter((cap) => {
+      const point = new THREE.Vector3().fromBufferAttribute(cap.geometry.attributes.position, 0).applyMatrix4(cap.matrix);
+      return Math.abs(section.plane.distanceToPoint(point)) < tolerance;
+    });
+    let geometry = buildOverlaps(onPlane, section.plane, { tolerance, lift: viewer.bounds.radius * 2e-4 });
+    const others = viewer.sections.filter((other) => other !== section).map((other) => other.plane);
+    if (geometry && others.length > 0) geometry = clipGeometry(geometry, others);
+    if (!geometry) continue;
+    const mesh = new THREE.Mesh(geometry, overlapMaterial);
+    mesh.userData.ownGeometry = true;
+    root.add(mesh);
+  }
+  for (const caps of bySection.values()) for (const cap of caps) if (cap.geometry.userData.disposeAfterOverlaps) cap.geometry.dispose();
   scene.add(root);
 
   scene.environment = viewer.environmentTexture;
@@ -315,7 +353,7 @@ async function requestDevice(kind) {
  * the PNG.
  */
 export async function startRender(viewer, options) {
-  const { width, height, transparent, backdrop, denoise, gentle, onProgress, orbit = 0 } = options;
+  const { width, height, transparent, backdrop, denoise, gentle, onProgress, orbit = 0, edges } = options;
   const gradient = !transparent && !viewer.showsEnvironmentBackground ? backdrop.gradient : null;
   // Test hook for trying settings from the console, e.g. window.__renderDebug = { samples: 4 }.
   const debug = window.__renderDebug;
@@ -483,13 +521,22 @@ export async function startRender(viewer, options) {
       // so the PNG has to be captured right after drawing.
       state = 'complete';
       let source = canvas;
-      if (gradient) {
+      let overlay = null;
+      if (edges) {
+        try {
+          overlay = renderEdgeOverlay(viewer, camera, { width, height, color: edges.color, lineWidth: edges.width });
+        } catch (error) {
+          console.warn('The edge lines could not be drawn.', error);
+        }
+      }
+      if (gradient || overlay) {
         source = document.createElement('canvas');
         source.width = width;
         source.height = height;
         const context = source.getContext('2d');
-        paintGradient(context, gradient, width, height);
+        if (gradient) paintGradient(context, gradient, width, height);
         context.drawImage(canvas, 0, 0);
+        if (overlay) context.drawImage(overlay, 0, 0);
       }
       source.toBlob((blob) => {
         cleanup();

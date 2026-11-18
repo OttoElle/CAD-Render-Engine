@@ -2103,3 +2103,55 @@ button.active {
 .field-text {
   color: var(--muted);
 }
+
+/* --- Loading card ------------------------------------------------------------ */
+
+#loading {
+  position: absolute;
+  z-index: 30;
+  top: 50%;
+  left: calc(var(--inset) + (100% - var(--inset)) / 2);
+  transform: translate(-50%, -50%);
+  width: min(340px, calc(100% - var(--inset) - 32px));
+  pointer-events: none;
+}
+
+.loading-card {
+  padding: 16px 18px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.loading-title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loading-bar {
+  height: 6px;
+  margin: 12px 0 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eceef2;
+}
+
+.loading-fill {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+
+.loading-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

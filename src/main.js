@@ -6,6 +6,7 @@ import { SHORTCUT_ACTIONS, shortcutFor, shortcutLabel } from './shortcuts.js';
 import { renderSettings, isRecordingShortcut } from './settings.js';
 import { ViewCube } from './viewcube.js';
 import { loadStepFile } from './step-loader.js';
+import { createLoadingIndicator } from './loading.js';
 import { getMaterialDef, resolveLook } from './materials.js';
 import { loadHdriFile, getLightPreset, presetLights, newLight } from './environment.js';
 import {
@@ -91,6 +92,7 @@ const hdriInput = $('#hdri-input');
 const projectInput = $('#project-input');
 const dropzone = $('#dropzone');
 const statusEl = $('#status');
+const beginLoading = createLoadingIndicator(statusEl.parentElement);
 const treeEl = $('#tree');
 const panelEl = $('#panel');
 const outputFrameEl = $('#output-frame');
@@ -151,7 +153,7 @@ function applyMaterials() {
     const entry = materialEntryOf(part.id);
     const materialId = entry ? entry.materialId : 'cad';
     const colorHex = entry ? entry.colorHex : `#${part.cadColor.getHexString()}`;
-    const look = resolveLook(materialId, colorHex, entry?.tuning);
+    const look = resolveLook(materialId, entry?.surfaceId, colorHex, entry?.tuning);
     const key = JSON.stringify(look);
     if (part.lookKey === key) continue;
     part.materialId = materialId;
@@ -696,6 +698,7 @@ async function runRender(render) {
         },
         orbit: render.turntable ? (index / count) * Math.PI * 2 : 0,
         denoise: output.denoise,
+        edges: output.edges ? { color: output.edgeColor, width: output.edgeWidth } : null,
         device: output.device,
         // Software rendering only stays stable with small work packages.
         gentle: output.gentle || output.device === 'cpu',
@@ -1087,10 +1090,12 @@ async function loadModel(file, { record, store }) {
   const token = projectToken;
   loading = true;
   showModelUi();
-  setStatus(`Loading ${file.name} …`);
+  setStatus('');
   const started = performance.now();
+  const progress = beginLoading(store ? 1 : 1 + addedFileCount(record));
+  progress.file(file, 0);
   try {
-    const parts = await loadStepFile(file);
+    const parts = await loadStepFile(file, progress.progress);
     if (token !== projectToken) return;
     // Parts the user added from further files come after those of the model, in the order they were added.
     const added = [];
@@ -1102,7 +1107,8 @@ async function loadModel(file, { record, store }) {
           setStatus(`${record.addedFiles[i].name} is no longer stored. Please add it again.`, { error: true });
           break;
         }
-        const extraParts = await loadStepFile(extra);
+        progress.file(extra, i + 1);
+        const extraParts = await loadStepFile(extra, progress.progress);
         if (token !== projectToken) return;
         appendParts(parts, extraParts);
         added.push({ name: extra.name, partCount: extraParts.length });
@@ -1133,12 +1139,14 @@ async function loadModel(file, { record, store }) {
     setCollapsed('parts', parts.length > 12);
     if (store) state.selected = 'geometry';
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
+    progress.finish();
     setStatus(`${file.name} loaded (${seconds} s)`, { timeout: 2500 });
   } catch (error) {
     if (token !== projectToken) return;
     console.error(error);
     setStatus(`Import failed: ${error.message}`, { error: true });
   } finally {
+    progress.finish();
     if (token === projectToken) {
       loading = false;
       showModelUi();
@@ -1178,9 +1186,11 @@ async function addPartFile(file) {
   }
   const token = projectToken;
   loading = true;
-  setStatus(`Adding ${file.name} …`);
+  setStatus('');
+  const progress = beginLoading();
+  progress.file(file);
   try {
-    const extra = await loadStepFile(file);
+    const extra = await loadStepFile(file, progress.progress);
     if (token !== projectToken) return;
     const index = state.addedFiles.length;
     appendParts(state.parts, extra);
@@ -1194,6 +1204,7 @@ async function addPartFile(file) {
     console.error(error);
     setStatus(`Import failed: ${error.message}`, { error: true });
   } finally {
+    progress.finish();
     loading = false;
     if (token === projectToken) emit('model');
   }

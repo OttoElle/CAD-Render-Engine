@@ -9,9 +9,13 @@ function getWorker() {
   if (!worker) {
     worker = new Worker(new URL('./step-worker.js', import.meta.url), { type: 'module' });
     worker.onmessage = (event) => {
-      const { id, ok, message, ...payload } = event.data;
+      const { id, ok, message, progress, ...payload } = event.data;
       const entry = pending.get(id);
       if (!entry) return;
+      if (progress) {
+        entry.onProgress?.(progress);
+        return;
+      }
       pending.delete(id);
       if (ok) entry.resolve(payload);
       else entry.reject(new Error(message));
@@ -27,10 +31,10 @@ function getWorker() {
   return worker;
 }
 
-function importStep(buffer) {
+function importStep(buffer, onProgress) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
-    pending.set(id, { resolve, reject });
+    pending.set(id, { resolve, reject, onProgress });
     getWorker().postMessage({ id, buffer }, [buffer]);
   });
 }
@@ -40,10 +44,15 @@ const DEFAULT_COLOR = new THREE.Color(0xb8bcc4);
 /**
  * Loads a STEP file and returns a list of parts. Each part is one THREE.Mesh
  * plus the metadata the UI needs (name, colour, triangle count).
+ * `onProgress({ stage, done, total })` reports the steps: 'read', 'engine'
+ * (starting OpenCascade), 'parse' (no finer progress available), 'edges'
+ * (done of total meshes) and 'build'.
  */
-export async function loadStepFile(file) {
+export async function loadStepFile(file, onProgress) {
+  onProgress?.({ stage: 'read', done: 0, total: 0 });
   const buffer = await file.arrayBuffer();
-  const { root, meshes } = await importStep(buffer);
+  const { root, meshes } = await importStep(buffer, onProgress);
+  onProgress?.({ stage: 'build', done: 0, total: 0 });
 
   const parts = [];
   const usedNames = new Map();

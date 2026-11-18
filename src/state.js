@@ -1,4 +1,4 @@
-import { getMaterialDef, defaultTuning } from './materials.js';
+import { DEFAULT_MATERIAL, getSurface, surfaceColor, defaultTuning, materialLabel } from './materials.js';
 import { getLightPreset, presetLights } from './environment.js';
 import { defaultExplode } from './explode.js';
 
@@ -62,6 +62,10 @@ export const defaultCamera = () => ({ dof: false, fStop: 4, focusPoint: null });
  * How cut faces look. `hatch` is 'none', 'lines' or 'cross' (see HATCH_PATTERNS in hatch.js);
  * `hatchSpacing` is the distance between lines in mm (0 = chosen from the model's size),
  * `hatchAlternate` turns the lines by 90° on every other part, as in a technical drawing.
+ * `hatchWidth` is the line width as a share of the spacing; `hatchAuto` draws the lines in a
+ * darker (or, on dark parts, lighter) shade of the cut face instead of `hatchColor`;
+ * `outline` draws a border along the edges of each hatched cut face; `overlaps` marks in red
+ * where the cut faces of two parts overlap, i.e. where the CAD parts intersect.
  */
 export const defaultSectionCap = () => ({
   mode: 'material',
@@ -71,6 +75,10 @@ export const defaultSectionCap = () => ({
   hatchSpacing: 0,
   hatchAngle: 45,
   hatchAlternate: true,
+  hatchWidth: 0.14,
+  hatchAuto: true,
+  outline: true,
+  overlaps: true,
 });
 /**
  * Rendering device and the settings new render jobs start with. A job copies
@@ -89,6 +97,10 @@ export const defaultOutput = () => ({
   gentle: false,
   /** File format for saving: 'png' or 'jpg' (see FILE_FORMATS in export.js). */
   format: 'png',
+  /** Edge lines over the rendering: colour and width in pixels on a Full HD image. */
+  edges: false,
+  edgeColor: '#1f2328',
+  edgeWidth: 1.5,
   /** Images per turn of a turntable series. */
   turntableFrames: 36,
   /** Length of one turn in the video, in seconds. */
@@ -110,6 +122,9 @@ export const JOB_SETTINGS = [
   'denoise',
   'format',
   'transparent',
+  'edges',
+  'edgeColor',
+  'edgeWidth',
   'turntableFrames',
   'turntableSeconds',
 ];
@@ -143,7 +158,7 @@ export const state = {
   /** How cut faces look: `mode` 'material' (like the part) or 'color'. */
   sectionCap: defaultSectionCap(),
   /**
-   * Material entries: { id, materialId, colorHex, tuning, partIds:Set }. A part is in at most one entry.
+   * Material entries: { id, materialId, surfaceId, colorHex, tuning, partIds:Set }. A part is in at most one entry.
    * `tuning` holds the slider values (roughness, metalness, clearcoat, finish, finishAxis, finishStrength).
    */
   materials: [],
@@ -296,12 +311,14 @@ export function materialEntryOf(partId) {
   return state.materials.find((entry) => entry.partIds.has(partId)) || null;
 }
 
-export function addMaterial(materialId = 'alu-satin', { claimAll = true } = {}) {
+export function addMaterial(materialId = DEFAULT_MATERIAL, { claimAll = true } = {}) {
+  const surfaceId = getSurface(materialId).id;
   const entry = {
     id: newId(),
     materialId,
-    colorHex: getMaterialDef(materialId).color,
-    tuning: defaultTuning(materialId),
+    surfaceId,
+    colorHex: surfaceColor(materialId, surfaceId),
+    tuning: defaultTuning(materialId, surfaceId),
     partIds: new Set(),
   };
   // The first entry starts with every part, which is the common case for single parts.
@@ -332,5 +349,5 @@ export function setPartsAssigned(entry, partIds, assigned) {
 }
 
 export function materialEntryLabel(entry) {
-  return getMaterialDef(entry.materialId).label;
+  return materialLabel(entry.materialId, entry.surfaceId);
 }

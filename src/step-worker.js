@@ -100,14 +100,24 @@ function buildFaceEdges(position, index, brepFaces, welded) {
 self.onmessage = async (event) => {
   const { id, buffer } = event.data;
   try {
+    const progress = (stage, done = 0, total = 0) => self.postMessage({ id, progress: { stage, done, total } });
+    progress('engine');
     const occt = await getOcct();
+    progress('parse');
     const result = occt.ReadStepFile(new Uint8Array(buffer), IMPORT_PARAMS);
     if (!result || !result.success) {
       throw new Error('The file could not be read as STEP.');
     }
 
     const transfer = [];
-    const meshes = result.meshes.map((mesh) => {
+    const total = result.meshes.length;
+    progress('edges', 0, total);
+    let lastReport = performance.now();
+    const meshes = result.meshes.map((mesh, meshIndex) => {
+      if (performance.now() - lastReport > 50) {
+        lastReport = performance.now();
+        progress('edges', meshIndex, total);
+      }
       const position = new Float32Array(mesh.attributes.position.array);
       const index = new Uint32Array(mesh.index.array);
       const welded = weldVertices(position);

@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { CadControls } from './cad-controls.js';
 import { createMaterial, finishFrame, applyFinishTangents } from './materials.js';
 import { buildEnvironmentTexture, getLightPreset, CUSTOM_SHADOW } from './environment.js';
-import { buildCap } from './section.js';
+import { buildCap, buildCapOutline } from './section.js';
+import { buildOverlaps, createOverlapMaterial, overlapTolerance } from './overlap.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { Manipulator } from './manipulator.js';
-import { createCapMaterial, applyHatchUv, hatchAngleFor, hatchSpacing } from './hatch.js';
+import { createCapMaterial, createOutlineMaterial, applyHatchUv, hatchAngleFor, hatchSpacing, hasOutline, outlineWidth } from './hatch.js';
 import { buildCoveGeometry, placeCove, gradientCss, floorMaterialParams, coveAlbedo, REFLECTION_F90_SCALE } from './backdrop.js';
 
 const SELECT_EMISSIVE = new THREE.Color(0x1f5fbf);
@@ -218,6 +219,9 @@ export class Viewer {
     this._capsDirty = false;
     this._capsChangedAt = 0;
     this._capsCost = 0;
+    /** Red marks where the cut faces of two parts overlap (see overlap.js). */
+    this._overlaps = [];
+    this._overlapMaterial = createOverlapMaterial();
 
     // Outline and faint fill of the section plane that is being edited.
     this._sectionHelper = new THREE.Group();
@@ -946,7 +950,7 @@ export class Viewer {
     const placed = new THREE.Matrix4().multiplyMatrices(matrix, part.mesh.matrix);
     part.worldPlanes = this.sectionPlanesFor(part).map((plane) => plane.clone().applyMatrix4(placed));
     const planes = part.worldPlanes.length > 0 ? part.worldPlanes : null;
-    for (const material of [part.mesh.material, part.edges?.material, part.capMaterial]) {
+    for (const material of [part.mesh.material, part.edges?.material, part.capMaterial, part.outlineMaterial]) {
       if (!material) continue;
       material.clippingPlanes = planes;
       material.clipShadows = true;
@@ -961,22 +965,32 @@ export class Viewer {
     part.caps = [];
     part.capMaterial?.dispose();
     part.capMaterial = null;
+    part.outlineMaterial?.dispose();
+    part.outlineMaterial = null;
   }
 
   _rebuildCaps() {
     const started = performance.now();
     // Slightly inside the kept side, so a cap is not clipped at its own plane.
     const offset = this.bounds.radius * 2e-4;
+    /** Caps per section, for finding overlapping parts. */
+    const bySection = new Map(this.sections.map((section) => [section, []]));
     for (const part of this.parts) {
       this._disposeCaps(part);
       const planes = this.sectionPlanesFor(part);
       if (planes.length === 0) continue;
+      const cutBy = this.sections.filter((section) => !section.uncut.has(part.id));
+      part.mesh.updateMatrix();
+      const faceColor = this.capStyle.mode === 'color' ? this.capStyle.color : part.colorHex || '#c9ced6';
       part.capMaterial = createCapMaterial(this.capStyle, part.mesh.material, part.colorHex || '#c9ced6');
-      if (part.capMaterial) this._applyClipping(part);
+      const outlined = hasOutline(this.capStyle);
+      if (outlined) part.outlineMaterial = createOutlineMaterial(this.capStyle, faceColor);
+      if (part.capMaterial || part.outlineMaterial) this._applyClipping(part);
       const hatched = this.capStyle.hatch !== 'none';
-      for (const plane of planes) {
+      for (const [index, plane] of planes.entries()) {
         const geometry = buildCap(part.mesh.geometry, plane, offset);
         if (!geometry) continue;
+        if (part.mesh.visible && !part.removed) bySection.get(cutBy[index])?.push({ geometry, matrix: part.mesh.matrix, partId: part.id });
         if (hatched) applyHatchUv(geometry, plane, hatchSpacing(this.capStyle, this.modelBox), hatchAngleFor(this.capStyle, part.id));
         else if (part.finishFrame && !part.capMaterial) applyFinishTangents(geometry, part.look.finish, part.finishFrame);
         const cap = new THREE.Mesh(geometry, part.capMaterial || part.mesh.material);
@@ -984,9 +998,47 @@ export class Viewer {
         cap.raycast = () => {};
         part.mesh.add(cap);
         part.caps.push(cap);
+        // The border sits between the cap and its plane, so it is drawn on top of the cap.
+        const band = outlined ? buildCapOutline(geometry, outlineWidth(this.capStyle, this.modelBox), offset * 0.5) : null;
+        if (band) {
+          const outline = new THREE.Mesh(band, part.outlineMaterial);
+          outline.raycast = () => {};
+          part.mesh.add(outline);
+          part.caps.push(outline);
+        }
       }
     }
+    this._rebuildOverlaps(bySection, offset);
     this._capsCost = performance.now() - started;
+  }
+
+  /** Marks where cut faces of different parts lie on top of each other, in red on top of both. */
+  _rebuildOverlaps(bySection, offset) {
+    for (const mesh of this._overlaps) {
+      this.modelRoot.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    this._overlaps = [];
+    if (this.capStyle.overlaps === false) return;
+    const tolerance = overlapTolerance(this.modelBox);
+    const point = new THREE.Vector3();
+    for (const [section, caps] of bySection) {
+      // Parts moved off the plane, e.g. exploded along it, have their cut faces elsewhere.
+      const onPlane = caps.filter((cap) => {
+        point.fromBufferAttribute(cap.geometry.attributes.position, 0).applyMatrix4(cap.matrix);
+        return Math.abs(section.plane.distanceToPoint(point)) < offset * 4 + tolerance;
+      });
+      // Between the cap and its plane, so the section's own clipping keeps it.
+      const geometry = buildOverlaps(onPlane, section.plane, { tolerance, lift: -offset * 0.25 });
+      if (!geometry) continue;
+      const mesh = new THREE.Mesh(geometry, this._overlapMaterial);
+      mesh.raycast = () => {};
+      this.modelRoot.add(mesh);
+      this._overlaps.push(mesh);
+    }
+    this.modelRoot.updateMatrixWorld();
+    const planes = this.sections.map((section) => section.plane.clone().applyMatrix4(this.modelRoot.matrixWorld));
+    this._overlapMaterial.clippingPlanes = planes.length > 0 ? planes : null;
   }
 
   /** Shows the outline of a section plane (CAD coordinates) while it is edited, or hides it with null. */
@@ -1039,6 +1091,8 @@ export class Viewer {
     const part = this.parts[id];
     if (!part) return;
     part.mesh.visible = visible;
+    // A hidden part no longer overlaps the others in the cut.
+    if (this.sections.length > 0) this._capsDirty = true;
     this.requestRender();
   }
 

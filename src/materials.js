@@ -1,143 +1,252 @@
 import * as THREE from 'three';
 
 /**
- * Material library. `color: null` means "keep the colour from the CAD file".
- * `params` are MeshPhysicalMaterial parameters, which the real-time view and
- * the path tracer both understand. `finish` adds machining marks: 'brushed'
- * (straight lines) or 'turned' (circles around an axis, as from a lathe).
+ * Material library: a material (what the part is made of) and its surface
+ * (how it was finished) are chosen separately. `color: null` means "keep the
+ * colour from the CAD file". `params` are MeshPhysicalMaterial parameters,
+ * which the real-time view and the path tracer both understand; a surface's
+ * params and colour override the material's. A surface's `finish` adds
+ * machining marks: 'brushed' (straight lines) or 'turned' (circles around an
+ * axis, as from a lathe).
  */
 export const MATERIAL_GROUPS = {
   metal: 'Metal',
   plastic: 'Plastic',
-  coating: 'Paint and coating',
-  other: 'Glass and other',
+  other: 'Paint, glass and other',
 };
 
+/** Surfaces every metal can have, from machining. */
+const MACHINED = [
+  { id: 'satin', label: 'Satin', params: { roughness: 0.3 } },
+  { id: 'polished', label: 'Polished', params: { roughness: 0.08 } },
+  { id: 'blasted', label: 'Bead-blasted', params: { roughness: 0.45 } },
+  { id: 'brushed', label: 'Brushed', params: { roughness: 0.3 }, finish: 'brushed' },
+  { id: 'turned', label: 'Turned', params: { roughness: 0.22 }, finish: 'turned' },
+];
+
+const METAL = { metalness: 1, roughness: 0.3 };
+
 export const MATERIALS = [
-  { id: 'cad', label: 'Original (CAD colour)', color: null, params: { metalness: 0, roughness: 0.5 } },
+  {
+    id: 'cad',
+    label: 'Original (CAD colour)',
+    color: null,
+    params: { metalness: 0, roughness: 0.5 },
+    surfaces: [{ id: 'standard', label: 'Standard' }],
+  },
 
-  { id: 'alu-satin', group: 'metal', label: 'Aluminium satin', color: '#cdd0d3', params: { metalness: 1, roughness: 0.3 } },
-  { id: 'alu-matt', group: 'metal', label: 'Aluminium bead-blasted', color: '#d5d7da', params: { metalness: 1, roughness: 0.42 } },
-  { id: 'alu-poliert', group: 'metal', label: 'Aluminium polished', color: '#e6e7e9', params: { metalness: 1, roughness: 0.08 } },
   {
-    id: 'alu-gebuerstet',
+    id: 'aluminium',
     group: 'metal',
-    label: 'Aluminium brushed',
-    color: '#d3d6d9',
-    params: { metalness: 1, roughness: 0.3 },
-    finish: 'brushed',
+    label: 'Aluminium',
+    color: '#cdd0d3',
+    params: METAL,
+    surfaces: [
+      ...MACHINED,
+      {
+        id: 'anodised',
+        label: 'Anodised',
+        color: '#1b1c1f',
+        params: { roughness: 0.36, clearcoat: 0.2, clearcoatRoughness: 0.25 },
+      },
+    ],
   },
   {
-    id: 'alu-gedreht',
+    id: 'steel',
     group: 'metal',
-    label: 'Aluminium turned',
-    color: '#d9dbde',
-    params: { metalness: 1, roughness: 0.22 },
-    finish: 'turned',
+    label: 'Steel',
+    color: '#8f9296',
+    params: METAL,
+    surfaces: [
+      ...MACHINED,
+      { id: 'ground', label: 'Ground', color: '#a3a6aa', params: { roughness: 0.2 }, finish: 'turned' },
+      { id: 'black-oxide', label: 'Black oxide', color: '#2c2d30', params: { roughness: 0.42 } },
+      { id: 'galvanised', label: 'Galvanised', color: '#b9bec4', params: { roughness: 0.5 } },
+      { id: 'chrome', label: 'Chrome-plated', color: '#d4d6d9', params: { roughness: 0.03 } },
+    ],
   },
-  { id: 'alu-schwarz', group: 'metal', label: 'Aluminium anodised black', color: '#1b1c1f', params: { metalness: 1, roughness: 0.38 } },
   {
-    id: 'alu-eloxiert',
+    id: 'stainless',
     group: 'metal',
-    label: 'Aluminium anodised colour',
-    color: '#2f5fa8',
-    params: { metalness: 1, roughness: 0.32, clearcoat: 0.25, clearcoatRoughness: 0.25 },
+    label: 'Stainless steel',
+    color: '#c6c8cb',
+    params: METAL,
+    surfaces: [...MACHINED, { id: 'ground', label: 'Ground', params: { roughness: 0.18 }, finish: 'turned' }],
   },
-  { id: 'stahl', group: 'metal', label: 'Steel', color: '#8f9296', params: { metalness: 1, roughness: 0.3 } },
   {
-    id: 'stahl-geschliffen',
+    id: 'cast-iron',
     group: 'metal',
-    label: 'Steel ground',
-    color: '#a3a6aa',
-    params: { metalness: 1, roughness: 0.2 },
-    finish: 'turned',
+    label: 'Cast iron',
+    color: '#6c6e71',
+    params: METAL,
+    surfaces: [{ id: 'raw', label: 'Raw cast', params: { roughness: 0.62 } }, ...MACHINED],
   },
-  { id: 'stahl-bruniert', group: 'metal', label: 'Steel black oxide', color: '#2c2d30', params: { metalness: 1, roughness: 0.42 } },
-  { id: 'edelstahl', group: 'metal', label: 'Stainless steel polished', color: '#c9cbcd', params: { metalness: 1, roughness: 0.12 } },
-  {
-    id: 'edelstahl-gebuerstet',
-    group: 'metal',
-    label: 'Stainless steel brushed',
-    color: '#c3c5c8',
-    params: { metalness: 1, roughness: 0.28 },
-    finish: 'brushed',
-  },
-  { id: 'verzinkt', group: 'metal', label: 'Steel galvanised', color: '#b9bec4', params: { metalness: 1, roughness: 0.5 } },
-  { id: 'chrom', group: 'metal', label: 'Chrome', color: '#d4d6d9', params: { metalness: 1, roughness: 0.03 } },
-  { id: 'guss', group: 'metal', label: 'Cast iron raw', color: '#6c6e71', params: { metalness: 1, roughness: 0.62 } },
-  { id: 'titan', group: 'metal', label: 'Titanium', color: '#b5afa7', params: { metalness: 1, roughness: 0.3 } },
-  { id: 'messing', group: 'metal', label: 'Brass', color: '#d8b56a', params: { metalness: 1, roughness: 0.22 } },
-  { id: 'kupfer', group: 'metal', label: 'Copper', color: '#d98c68', params: { metalness: 1, roughness: 0.2 } },
-  { id: 'gold', group: 'metal', label: 'Gold', color: '#f0c66b', params: { metalness: 1, roughness: 0.12 } },
+  { id: 'titanium', group: 'metal', label: 'Titanium', color: '#b5afa7', params: METAL, surfaces: MACHINED },
+  { id: 'brass', group: 'metal', label: 'Brass', color: '#d8b56a', params: METAL, surfaces: MACHINED },
+  { id: 'copper', group: 'metal', label: 'Copper', color: '#d98c68', params: METAL, surfaces: MACHINED },
+  { id: 'gold', group: 'metal', label: 'Gold', color: '#f0c66b', params: METAL, surfaces: MACHINED },
 
-  { id: 'kunststoff-matt', group: 'plastic', label: 'Plastic matte', color: '#2b2d31', params: { metalness: 0, roughness: 0.7 } },
-  { id: 'kunststoff-seidenmatt', group: 'plastic', label: 'Plastic satin', color: '#e9e8e3', params: { metalness: 0, roughness: 0.42 } },
   {
-    id: 'kunststoff-glanz',
+    id: 'plastic',
     group: 'plastic',
-    label: 'Plastic glossy',
-    color: '#d9342b',
-    params: { metalness: 0, roughness: 0.18, clearcoat: 0.6, clearcoatRoughness: 0.1 },
+    label: 'Plastic',
+    color: '#2b2d31',
+    params: { metalness: 0, roughness: 0.42 },
+    surfaces: [
+      { id: 'satin', label: 'Satin', params: { roughness: 0.42 } },
+      { id: 'matte', label: 'Matte', params: { roughness: 0.7 } },
+      { id: 'glossy', label: 'Glossy', params: { roughness: 0.18, clearcoat: 0.6, clearcoatRoughness: 0.1 } },
+    ],
   },
   {
-    id: 'kunststoff-transparent',
+    id: 'clear-plastic',
     group: 'plastic',
-    label: 'Plastic clear',
+    label: 'Clear plastic',
     color: '#f4f8fb',
     params: { metalness: 0, roughness: 0.05, transmission: 1, ior: 1.49, thickness: 2 },
+    surfaces: [
+      { id: 'clear', label: 'Clear' },
+      { id: 'frosted', label: 'Frosted', params: { roughness: 0.35 } },
+    ],
   },
-  { id: 'gummi', group: 'plastic', label: 'Rubber', color: '#141414', params: { metalness: 0, roughness: 0.95 } },
+  {
+    id: 'rubber',
+    group: 'plastic',
+    label: 'Rubber',
+    color: '#141414',
+    params: { metalness: 0, roughness: 0.95 },
+    surfaces: [{ id: 'standard', label: 'Standard' }],
+  },
 
   {
-    id: 'lack',
-    group: 'coating',
-    label: 'Paint glossy',
+    id: 'paint',
+    group: 'other',
+    label: 'Paint',
     color: '#1f5fbf',
     params: { metalness: 0, roughness: 0.35, clearcoat: 1, clearcoatRoughness: 0.04 },
-  },
-  { id: 'lack-matt', group: 'coating', label: 'Paint matte', color: '#3a4a5c', params: { metalness: 0, roughness: 0.62 } },
-  {
-    id: 'lack-metallic',
-    group: 'coating',
-    label: 'Metallic paint',
-    color: '#7a8796',
-    params: { metalness: 0.55, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.03 },
+    surfaces: [
+      { id: 'glossy', label: 'Glossy' },
+      { id: 'matte', label: 'Matte', params: { roughness: 0.62, clearcoat: 0 } },
+      { id: 'metallic', label: 'Metallic', params: { metalness: 0.55, roughness: 0.38, clearcoatRoughness: 0.03 } },
+      { id: 'powder', label: 'Powder coated', params: { roughness: 0.48, clearcoat: 0.15, clearcoatRoughness: 0.45 } },
+    ],
   },
   {
-    id: 'pulver',
-    group: 'coating',
-    label: 'Powder coating',
-    color: '#2d3033',
-    params: { metalness: 0, roughness: 0.48, clearcoat: 0.15, clearcoatRoughness: 0.45 },
-  },
-
-  {
-    id: 'glas',
+    id: 'glass',
     group: 'other',
     label: 'Glass',
     color: '#ffffff',
     params: { metalness: 0, roughness: 0.02, transmission: 1, ior: 1.5, thickness: 2 },
+    surfaces: [
+      { id: 'clear', label: 'Clear' },
+      { id: 'frosted', label: 'Frosted', params: { roughness: 0.35 } },
+    ],
   },
   {
-    id: 'glas-satiniert',
+    id: 'ceramic',
     group: 'other',
-    label: 'Glass frosted',
-    color: '#ffffff',
-    params: { metalness: 0, roughness: 0.35, transmission: 1, ior: 1.5, thickness: 2 },
-  },
-  {
-    id: 'keramik',
-    group: 'other',
-    label: 'Ceramic glazed',
+    label: 'Ceramic',
     color: '#f2f0ea',
     params: { metalness: 0, roughness: 0.3, clearcoat: 0.8, clearcoatRoughness: 0.05 },
+    surfaces: [
+      { id: 'glazed', label: 'Glazed' },
+      { id: 'unglazed', label: 'Unglazed', params: { roughness: 0.65, clearcoat: 0 } },
+    ],
   },
 ];
 
 const BY_ID = new Map(MATERIALS.map((material) => [material.id, material]));
 
+/**
+ * Materials of earlier versions, where every surface was its own material,
+ * as [material, surface]. Projects and templates saved with them still open.
+ */
+const LEGACY = {
+  'alu-satin': ['aluminium', 'satin'],
+  'alu-matt': ['aluminium', 'blasted'],
+  'alu-poliert': ['aluminium', 'polished'],
+  'alu-gebuerstet': ['aluminium', 'brushed'],
+  'alu-gedreht': ['aluminium', 'turned'],
+  'alu-schwarz': ['aluminium', 'anodised'],
+  'alu-eloxiert': ['aluminium', 'anodised'],
+  stahl: ['steel', 'satin'],
+  'stahl-geschliffen': ['steel', 'ground'],
+  'stahl-bruniert': ['steel', 'black-oxide'],
+  verzinkt: ['steel', 'galvanised'],
+  chrom: ['steel', 'chrome'],
+  edelstahl: ['stainless', 'polished'],
+  'edelstahl-gebuerstet': ['stainless', 'brushed'],
+  guss: ['cast-iron', 'raw'],
+  titan: ['titanium', 'satin'],
+  messing: ['brass', 'satin'],
+  kupfer: ['copper', 'satin'],
+  gold: ['gold', 'satin'],
+  'kunststoff-matt': ['plastic', 'matte'],
+  'kunststoff-seidenmatt': ['plastic', 'satin'],
+  'kunststoff-glanz': ['plastic', 'glossy'],
+  'kunststoff-transparent': ['clear-plastic', 'clear'],
+  gummi: ['rubber', 'standard'],
+  lack: ['paint', 'glossy'],
+  'lack-matt': ['paint', 'matte'],
+  'lack-metallic': ['paint', 'metallic'],
+  pulver: ['paint', 'powder'],
+  glas: ['glass', 'clear'],
+  'glas-satiniert': ['glass', 'frosted'],
+  keramik: ['ceramic', 'glazed'],
+};
+
+/** The default material of a new entry. */
+export const DEFAULT_MATERIAL = 'aluminium';
+
 export function getMaterialDef(id) {
-  return BY_ID.get(id) || MATERIALS[0];
+  return BY_ID.get(id) || BY_ID.get(LEGACY[id]?.[0]) || MATERIALS[0];
+}
+
+/** A surface of a material; the material's first surface when the id is unknown. */
+export function getSurface(materialId, surfaceId) {
+  const def = getMaterialDef(materialId);
+  return def.surfaces.find((surface) => surface.id === surfaceId) || def.surfaces[0];
+}
+
+/**
+ * Material and surface ids for stored data, including materials of earlier
+ * versions. A legacy material whose marks were changed by hand gets the
+ * surface with those marks, e.g. satin aluminium set to brushed.
+ */
+export function migrateMaterial(materialId, surfaceId, savedFinish) {
+  const legacy = LEGACY[materialId];
+  if (!legacy) {
+    const def = getMaterialDef(materialId);
+    return { materialId: def.id, surfaceId: getSurface(def.id, surfaceId).id };
+  }
+  const [id, surface] = legacy;
+  const keep = getSurface(id, surface);
+  const finishOf = (item) => item.finish ?? 'none';
+  if (!savedFinish || savedFinish === finishOf(keep)) return { materialId: id, surfaceId: keep.id };
+  const matching = getMaterialDef(id).surfaces.find((item) => finishOf(item) === savedFinish);
+  return { materialId: id, surfaceId: (matching || keep).id };
+}
+
+/** The library values of a material with a surface: { color, params, finish }. */
+function surfaceLook(materialId, surfaceId) {
+  const def = getMaterialDef(materialId);
+  const surface = getSurface(materialId, surfaceId);
+  return {
+    color: surface.color ?? def.color,
+    params: { ...def.params, ...surface.params },
+    finish: surface.finish ?? 'none',
+  };
+}
+
+/** Colour of a material with a surface in the library, e.g. black for anodised aluminium. */
+export function surfaceColor(materialId, surfaceId) {
+  return surfaceLook(materialId, surfaceId).color;
+}
+
+export function materialLabel(materialId, surfaceId) {
+  const def = getMaterialDef(materialId);
+  if (def.surfaces.length < 2) return def.label;
+  return `${def.label}, ${getSurface(materialId, surfaceId).label.toLowerCase()}`;
 }
 
 export const FINISHES = {
@@ -159,15 +268,15 @@ const DEFAULT_FINISH_STRENGTH = 0.7;
 
 /**
  * The adjustable values of a material entry, starting from the library
- * material. Sliders in the material panel change these.
+ * material and surface. Sliders in the material panel change these; the
+ * kind of machining marks comes from the surface.
  */
-export function defaultTuning(materialId) {
-  const def = getMaterialDef(materialId);
+export function defaultTuning(materialId, surfaceId) {
+  const { params } = surfaceLook(materialId, surfaceId);
   return {
-    roughness: def.params.roughness ?? 0.5,
-    metalness: def.params.metalness ?? 0,
-    clearcoat: def.params.clearcoat ?? 0,
-    finish: def.finish ?? 'none',
+    roughness: params.roughness ?? 0.5,
+    metalness: params.metalness ?? 0,
+    clearcoat: params.clearcoat ?? 0,
     finishAxis: 'auto',
     finishStrength: DEFAULT_FINISH_STRENGTH,
   };
@@ -176,46 +285,39 @@ export function defaultTuning(materialId) {
 const clamp01 = (value, fallback) => (Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback);
 
 /** Validated tuning for a material, e.g. from a stored project. Missing values come from the library. */
-export function sanitizeTuning(materialId, saved) {
-  const base = defaultTuning(materialId);
+export function sanitizeTuning(materialId, surfaceId, saved) {
+  const base = defaultTuning(materialId, surfaceId);
   if (!saved || typeof saved !== 'object') return base;
   return {
     roughness: clamp01(saved.roughness, base.roughness),
     metalness: clamp01(saved.metalness, base.metalness),
     clearcoat: clamp01(saved.clearcoat, base.clearcoat),
-    finish: FINISHES[saved.finish] ? saved.finish : base.finish,
     finishAxis: FINISH_AXES[saved.finishAxis] ? saved.finishAxis : base.finishAxis,
     finishStrength: clamp01(saved.finishStrength, base.finishStrength),
   };
 }
 
-export function isDefaultTuning(materialId, tuning) {
-  const base = defaultTuning(materialId);
+export function isDefaultTuning(materialId, surfaceId, tuning) {
+  const base = defaultTuning(materialId, surfaceId);
   return Object.keys(base).every((key) => base[key] === tuning[key]);
-}
-
-/** Colour a part gets when a library material is chosen without an override. */
-export function defaultColor(part, materialId) {
-  const def = getMaterialDef(materialId);
-  return def.color ?? `#${part.cadColor.getHexString()}`;
 }
 
 /**
  * Everything the 3D views need to build a part's material: the library
  * parameters with the user's tuning applied, the colour and the finish.
  */
-export function resolveLook(materialId, colorHex, tuning) {
-  const def = getMaterialDef(materialId);
-  const tune = tuning || defaultTuning(materialId);
-  const finish = tune.finish !== 'none' && tune.finishStrength > 0 ? tune.finish : 'none';
+export function resolveLook(materialId, surfaceId, colorHex, tuning) {
+  const look = surfaceLook(materialId, surfaceId);
+  const tune = tuning || defaultTuning(materialId, surfaceId);
+  const finish = look.finish !== 'none' && tune.finishStrength > 0 ? look.finish : 'none';
   return {
     color: colorHex,
     params: {
-      ...def.params,
+      ...look.params,
       roughness: tune.roughness,
       metalness: tune.metalness,
       clearcoat: tune.clearcoat,
-      clearcoatRoughness: def.params.clearcoatRoughness ?? 0.05,
+      clearcoatRoughness: look.params.clearcoatRoughness ?? 0.05,
       anisotropy: finish === 'none' ? 0 : tune.finishStrength,
     },
     finish,
@@ -225,7 +327,7 @@ export function resolveLook(materialId, colorHex, tuning) {
 
 /** Builds the three.js material for a part from its resolved look (see resolveLook). */
 export function createMaterial(part) {
-  const look = part.look || resolveLook(part.materialId, part.colorHex);
+  const look = part.look || resolveLook(part.materialId, null, part.colorHex);
   return new THREE.MeshPhysicalMaterial({
     ...look.params,
     color: new THREE.Color(look.color),

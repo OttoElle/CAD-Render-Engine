@@ -19,7 +19,7 @@ import {
   FLOORS,
   defaultAdjust,
 } from './state.js';
-import { getMaterialDef, sanitizeTuning } from './materials.js';
+import { migrateMaterial, sanitizeTuning, surfaceColor } from './materials.js';
 import {
   defaultExplode,
   cloneExplode,
@@ -222,6 +222,8 @@ function sanitizeJob(saved) {
     camera,
   };
   for (const key of JOB_SETTINGS) job[key] = typeof saved[key] === typeof defaults[key] ? saved[key] : defaults[key];
+  if (!/^#[0-9a-f]{6}$/i.test(job.edgeColor)) job.edgeColor = defaults.edgeColor;
+  job.edgeWidth = Math.min(Math.max(job.edgeWidth, 0.25), 20);
   return sanitizeImageSettings(job);
 }
 
@@ -298,6 +300,7 @@ function modelSnapshot() {
     partCount: state.parts.length,
     materials: state.materials.map((entry) => ({
       materialId: entry.materialId,
+      surfaceId: entry.surfaceId,
       colorHex: entry.colorHex,
       tuning: { ...entry.tuning },
       partIds: [...entry.partIds],
@@ -449,6 +452,7 @@ export function applyModelData(record) {
   for (const key of ['color', 'hatchColor']) if (!/^#[0-9a-f]{6}$/i.test(cap[key])) cap[key] = defaultSectionCap()[key];
   cap.hatchSpacing = Number.isFinite(cap.hatchSpacing) ? Math.min(Math.max(cap.hatchSpacing, 0), 1000) : 0;
   cap.hatchAngle = Number.isFinite(cap.hatchAngle) ? cap.hatchAngle % 180 : 45;
+  cap.hatchWidth = Number.isFinite(cap.hatchWidth) ? Math.min(Math.max(cap.hatchWidth, 0.02), 0.6) : 0.14;
   return {
     hidden: (record.hidden || []).filter(valid),
     removed: (record.removed || []).filter(valid),
@@ -478,12 +482,14 @@ export function applyPalette(palette) {
 
 /** A material entry from stored data. Entries saved before the sliders existed get the library values. */
 function restoreEntry(saved, partIds) {
-  const def = getMaterialDef(saved.materialId);
+  // Earlier versions had a material per surface, e.g. "alu-gebuerstet"; they become material and surface.
+  const { materialId, surfaceId } = migrateMaterial(saved.materialId, saved.surfaceId, saved.tuning?.finish);
   return {
     id: newId(),
-    materialId: def.id,
-    colorHex: /^#[0-9a-f]{6}$/i.test(saved.colorHex) ? saved.colorHex : def.color,
-    tuning: sanitizeTuning(def.id, saved.tuning),
+    materialId,
+    surfaceId,
+    colorHex: /^#[0-9a-f]{6}$/i.test(saved.colorHex) ? saved.colorHex : surfaceColor(materialId, surfaceId),
+    tuning: sanitizeTuning(materialId, surfaceId, saved.tuning),
     partIds: new Set(partIds),
   };
 }
@@ -740,6 +746,7 @@ export async function saveTemplate(name) {
     fov: viewProvider()?.fov ?? null,
     materials: state.materials.map((entry) => ({
       materialId: entry.materialId,
+      surfaceId: entry.surfaceId,
       colorHex: entry.colorHex,
       tuning: { ...entry.tuning },
       partNames: [...new Set([...entry.partIds].map((partId) => state.parts[partId]?.name).filter(Boolean))],

@@ -24,9 +24,10 @@ import {
 import {
   MATERIALS,
   MATERIAL_GROUPS,
-  FINISHES,
   FINISH_AXES,
   getMaterialDef,
+  getSurface,
+  surfaceColor,
   defaultTuning,
   isDefaultTuning,
 } from './materials.js';
@@ -141,30 +142,55 @@ function group(key, title, children, { open = true, title: hint } = {}) {
 }
 
 /**
- * A range slider with its value shown next to the label. Returns the field;
- * `set(value)` updates it from outside. With `edit` ({ digits, unit }) the
- * value is a number box that can be typed into, beyond the slider's range.
+ * A slider with a number box beside it, so a value can be dragged or typed.
+ * The box shows `toShown(position)` with the unit after it; a typed value goes
+ * through `exact(number)` when given (for sliders on a curved scale, so the
+ * typed value is kept as it is) or else is turned into a slider position with
+ * `fromShown` and limited to the slider's range. `format` is only used for
+ * sliders without a box (`typed: false`).
  */
-function slider(label, { min, max, step = 1, value, format, oninput, onchange, disabled, title, edit }) {
-  let output = h('output', null, format(value));
-  if (edit) {
-    const round = (number) => String(Number(number.toFixed(edit.digits ?? 1)));
-    const box = h('input', {
+function slider(
+  label,
+  { min, max, step = 1, value, format, oninput, onchange, disabled, title, unit = '', prefix = '', digits, toShown = (v) => v, fromShown = (v) => v, exact, limit = true, typed = true },
+) {
+  const places = digits ?? (Number.isInteger(step) ? 0 : 1);
+  const round = (number) => String(Number(Number(number).toFixed(places)));
+  let output;
+  let box = null;
+  if (typed) {
+    box = h('input', {
       type: 'number',
       class: 'slider-value',
-      step,
-      value: round(value),
+      step: 'any',
+      value: round(toShown(value)),
+      disabled,
+      'aria-label': label,
+      onkeydown: (event) => {
+        if (event.key === 'Enter') event.target.blur();
+      },
       onchange: (event) => {
-        const next = Number(event.target.value);
-        if (event.target.value === '' || !Number.isFinite(next)) return;
-        input.value = next;
-        oninput(next);
-        onchange?.(next);
+        const typedValue = Number(event.target.value);
+        if (event.target.value === '' || !Number.isFinite(typedValue)) {
+          event.target.value = round(toShown(Number(input.value)));
+          return;
+        }
+        if (exact) {
+          const shown = exact(typedValue);
+          input.value = fromShown(shown ?? typedValue);
+          event.target.value = round(shown ?? typedValue);
+          onchange?.(Number(input.value));
+          return;
+        }
+        const position = limit ? Math.min(Math.max(fromShown(typedValue), min), max) : fromShown(typedValue);
+        input.value = position;
+        event.target.value = round(toShown(position));
+        oninput(position);
+        onchange?.(position);
       },
     });
-    output = h('span', { class: 'slider-edit' }, box, edit.unit ? h('span', null, edit.unit) : null);
-    output.box = box;
-    output.round = round;
+    output = h('span', { class: 'slider-edit' }, prefix ? h('span', null, prefix) : null, box, unit ? h('span', { class: 'slider-unit' }, unit) : null);
+  } else {
+    output = h('output', null, format(value));
   }
   const input = h('input', {
     type: 'range',
@@ -173,9 +199,10 @@ function slider(label, { min, max, step = 1, value, format, oninput, onchange, d
     step,
     value,
     disabled,
+    'aria-label': label,
     oninput: (event) => {
       const next = Number(event.target.value);
-      if (edit) output.box.value = output.round(next);
+      if (box) box.value = round(toShown(next));
       else output.textContent = format(next);
       oninput(next);
     },
@@ -183,18 +210,23 @@ function slider(label, { min, max, step = 1, value, format, oninput, onchange, d
     onchange: onchange ? () => onchange(Number(input.value)) : null,
   });
   const node = h(
-    edit ? 'div' : 'label',
+    'div',
     { class: 'field', title },
     h('span', { class: 'field-label' }, label),
     h('span', { class: 'slider-control' }, input, h('span', { class: 'slider-output' }, output)),
   );
-  node.set = (next, text) => {
+  /** Shows a value set elsewhere; `shown` is the box's number when it is not the slider's mapping. */
+  node.set = (next, shown) => {
     if (document.activeElement !== input) input.value = next;
-    if (edit) {
-      if (document.activeElement !== output.box) output.box.value = output.round(next);
+    if (box) {
+      if (document.activeElement !== box) box.value = round(shown ?? toShown(next));
     } else {
-      output.textContent = text ?? format(next);
+      output.textContent = format(next);
     }
+  };
+  node.setDisabled = (off) => {
+    input.disabled = off;
+    if (box) box.disabled = off;
   };
   return node;
 }
@@ -266,7 +298,6 @@ function formatDuration(seconds) {
 
 const plural = (count, one, many) => `${numberFormat.format(count)} ${count === 1 ? one : many}`;
 
-const percent = (value) => `${value} %`;
 
 // --- Geometry -----------------------------------------------------------------
 
@@ -508,7 +539,7 @@ function partPanel(part, { actions }) {
                 max: 300,
                 step: 5,
                 value: Math.round(own.factor * 100),
-                format: (value) => `${value} % of the others`,
+                unit: '% of the others',
                 oninput: (value) => {
                   setPartExplode(state.explode, part.id, { factor: value / 100 });
                   emit('explode:live');
@@ -561,10 +592,23 @@ function capControls({ viewer }) {
     segmented('Hatching', Object.entries(HATCH_PATTERNS), cap.hatch, set('hatch')),
     hatched
       ? [
-          field('Line colour', h('input', { type: 'color', value: cap.hatchColor, oninput: (event) => set('hatchColor', true)(event.target.value) })),
+          field(
+            'Line colour',
+            selectControl(
+              [
+                ['auto', 'Shade of the face'],
+                ['color', 'Own colour'],
+              ],
+              cap.hatchAuto ? 'auto' : 'color',
+              (value) => set('hatchAuto')(value === 'auto'),
+            ),
+          ),
+          cap.hatchAuto
+            ? null
+            : field('Own line colour', h('input', { type: 'color', value: cap.hatchColor, oninput: (event) => set('hatchColor', true)(event.target.value) })),
           h(
             'div',
-            { class: 'field-grid two' },
+            { class: 'field-grid three' },
             numberBox('Spacing mm', {
               value: spacing,
               step: spacing >= 5 ? 1 : 0.1,
@@ -573,11 +617,22 @@ function capControls({ viewer }) {
               title: cap.hatchSpacing > 0 ? 'Distance between the lines' : 'Distance between the lines, chosen from the size of the model',
               onchange: (value) => set('hatchSpacing')(Math.max(value, 0.05)),
             }),
+            // Stored as a share of the spacing, so lines keep their weight when the spacing changes.
+            numberBox('Width mm', {
+              value: spacing * cap.hatchWidth,
+              step: Number((spacing * 0.02).toPrecision(1)),
+              min: 0,
+              digits: 3,
+              title: 'Width of the lines',
+              onchange: (value) => set('hatchWidth')(Math.min(Math.max(value / spacing, 0.02), 0.6)),
+            }),
             numberBox('Angle °', { value: cap.hatchAngle, step: 15, digits: 1, onchange: (value) => set('hatchAngle')(((value % 180) + 180) % 180) }),
           ),
           toggle('Turn on every other part', cap.hatchAlternate, set('hatchAlternate'), 'Neighbouring parts get lines at right angles, as in a technical drawing'),
+          toggle('Outline the cut faces', cap.outline, set('outline'), 'A line along the edges of each cut face, in the colour of the hatching'),
         ]
       : null,
+    toggle('Mark overlapping parts', cap.overlaps, set('overlaps'), 'Where two parts take up the same space in the CAD model, e.g. a thread drawn larger than its hole, the cut shows red'),
     h('p', { class: 'hint' }, 'Applies to all sections, in the viewport and in the rendering.'),
   ];
 }
@@ -626,8 +681,10 @@ function sectionPanel(section, { viewer, actions }) {
         max,
         step,
         value: section.position,
-        format: (value) => `${numberFormat.format(Math.round(value * 10) / 10)} mm`,
-        edit: { digits: 2, unit: 'mm' },
+        digits: 2,
+        unit: 'mm',
+        // A typed position may lie beyond the model, e.g. to show the uncut model.
+        limit: false,
         oninput: (value) => {
           section.position = value;
           emit('sections:live');
@@ -768,7 +825,19 @@ function selectionBox(partIds, onRemove, actions, empty) {
 
 function materialPanel(entry, { actions }) {
   const def = getMaterialDef(entry.materialId);
+  const surface = getSurface(entry.materialId, entry.surfaceId);
+  const finish = surface.finish ?? 'none';
+  const libraryColor = surfaceColor(entry.materialId, entry.surfaceId);
   const { tuning } = entry;
+  /** Switches material or surface; a colour the user picked stays, the library's follows the change. */
+  const choose = (materialId, surfaceId) => {
+    const keepColor = entry.colorHex !== libraryColor;
+    entry.materialId = materialId;
+    entry.surfaceId = getSurface(materialId, surfaceId).id;
+    if (!keepColor) entry.colorHex = surfaceColor(materialId, entry.surfaceId);
+    entry.tuning = { ...defaultTuning(materialId, entry.surfaceId), finishAxis: tuning.finishAxis, finishStrength: tuning.finishStrength };
+    emit('materials');
+  };
   const tune = (key, live = true) => (value) => {
     tuning[key] = value;
     emit(live ? 'materials:live' : 'materials');
@@ -778,12 +847,12 @@ function materialPanel(entry, { actions }) {
       min: 0,
       max: 100,
       value: Math.round(tuning[key] * 100),
-      format: percent,
+      unit: '%',
       title,
       oninput: (value) => tune(key)(value / 100),
       onchange: () => emit('materials'),
     });
-  const modified = entry.colorHex !== def.color || !isDefaultTuning(entry.materialId, tuning);
+  const modified = entry.colorHex !== libraryColor || !isDefaultTuning(entry.materialId, entry.surfaceId, tuning);
 
   return {
     title: materialEntryLabel(entry),
@@ -792,13 +861,18 @@ function materialPanel(entry, { actions }) {
     body: [
       field(
         'Material',
-        materialSelect(entry.materialId, (value) => {
-          entry.materialId = value;
-          entry.colorHex = getMaterialDef(value).color;
-          entry.tuning = defaultTuning(value);
-          emit('materials');
-        }),
+        materialSelect(entry.materialId, (value) => choose(value, entry.surfaceId)),
       ),
+      def.surfaces.length > 1
+        ? field(
+            'Surface',
+            selectControl(
+              def.surfaces.map((item) => [item.id, item.label]),
+              surface.id,
+              (value) => choose(entry.materialId, value),
+            ),
+          )
+        : null,
       field(
         'Colour',
         h('input', {
@@ -814,25 +888,17 @@ function materialPanel(entry, { actions }) {
         tuneSlider('Roughness', 'roughness', 'Low mirrors, high scatters the light'),
         tuneSlider('Metallic', 'metalness', 'Metals are at 100 %, plastics and paints at 0 %'),
         tuneSlider('Clear coat', 'clearcoat', 'A glossy layer on top of the material'),
-        field(
-          'Surface',
-          selectControl(
-            Object.entries(FINISHES).map(([key, value]) => [key, value.label]),
-            tuning.finish,
-            tune('finish', false),
-          ),
-        ),
-        tuning.finish !== 'none'
+        finish !== 'none'
           ? [
               field(
-                tuning.finish === 'turned' ? 'Turning axis' : 'Brushing direction',
+                finish === 'turned' ? 'Turning axis' : 'Brushing direction',
                 selectControl(Object.entries(FINISH_AXES), tuning.finishAxis, tune('finishAxis', false)),
               ),
               slider('Strength', {
                 min: 0,
                 max: 100,
                 value: Math.round(tuning.finishStrength * 100),
-                format: percent,
+                unit: '%',
                 title: 'How much the reflections smear across the marks',
                 oninput: (value) => tune('finishStrength')(value / 100),
                 onchange: () => emit('materials'),
@@ -888,10 +954,10 @@ function materialPanel(entry, { actions }) {
         'button',
         {
           disabled: !modified,
-          title: modified ? `Colour and fine tuning as in the library for ${def.label}` : 'Already at the defaults',
+          title: modified ? `Colour and fine tuning as in the library for ${materialEntryLabel(entry)}` : 'Already at the defaults',
           onclick: () => {
-            entry.colorHex = def.color;
-            entry.tuning = defaultTuning(entry.materialId);
+            entry.colorHex = libraryColor;
+            entry.tuning = defaultTuning(entry.materialId, entry.surfaceId);
             emit('materials');
           },
         },
@@ -940,7 +1006,7 @@ function scenePanel(which, { actions }) {
               min: 0,
               max: 100,
               value: Math.round(scene.shadow * 100),
-              format: (value) => (value === 0 ? 'none' : percent(value)),
+              unit: '%',
               title: 'How dark the shadow under the model is. 100 % is the shadow the lights cast',
               oninput: (value) => set('shadow', true)(value / 100),
               onchange: () => emit('scene'),
@@ -952,7 +1018,7 @@ function scenePanel(which, { actions }) {
                     min: 0,
                     max: 100,
                     value: Math.round(scene.reflection * 100),
-                    format: (value) => (value === 0 ? 'off' : percent(value)),
+                    unit: '%',
                     title: 'How strongly the floor mirrors the model and the light. On a dark background a dark lighting preset fits',
                     oninput: (value) => set('reflection', true)(value / 100),
                     onchange: () => emit('scene'),
@@ -962,7 +1028,7 @@ function scenePanel(which, { actions }) {
                         min: 0,
                         max: 100,
                         value: Math.round(scene.reflectionBlur * 100),
-                        format: (value) => (value === 0 ? 'sharp' : percent(value)),
+                        unit: '%',
                         title: 'Sharp like a mirror, or soft like a glossy surface',
                         oninput: (value) => set('reflectionBlur', true)(value / 100),
                       })
@@ -1036,7 +1102,6 @@ function scenePanel(which, { actions }) {
 
 // --- Lighting -----------------------------------------------------------------------
 
-const evFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1, signDisplay: 'exceptZero' });
 
 function lightingPanel({ actions }) {
   const { lighting } = state;
@@ -1074,7 +1139,7 @@ function lightingPanel({ actions }) {
         min: -180,
         max: 180,
         value: lighting.rotation,
-        format: (value) => `${value}°`,
+        unit: '°',
         title: 'Turns all lights around the model',
         oninput: (value) => {
           lighting.rotation = value;
@@ -1085,8 +1150,17 @@ function lightingPanel({ actions }) {
       slider('Exposure', {
         min: -9,
         max: 9,
-        value: Math.round(Math.log2(lighting.intensity) * 3),
-        format: (value) => `${evFormat.format(value / 3)} EV`,
+        value: Math.log2(lighting.intensity) * 3,
+        unit: 'EV',
+        digits: 2,
+        toShown: (value) => value / 3,
+        fromShown: (ev) => ev * 3,
+        exact: (ev) => {
+          const stops = Math.min(Math.max(ev, -3), 3);
+          lighting.intensity = 2 ** stops;
+          emit('lighting');
+          return stops;
+        },
         title: 'Brighter or darker in stops; the background stays',
         oninput: (value) => {
           lighting.intensity = 2 ** (value / 3);
@@ -1105,9 +1179,9 @@ function lightPanel(light, { actions }) {
     emit(live ? 'lighting:live' : 'lighting');
   };
   const angle = (label, key, min, max, title) =>
-    slider(label, { min, max, value: light[key], format: (value) => `${value}°`, title, oninput: set(key) });
+    slider(label, { min, max, value: light[key], unit: '°', title, oninput: set(key) });
   // Power on a logarithmic slider from 0.1 to 1000.
-  const toSlider = (power) => Math.round(Math.log10(Math.max(power, 0.1)) * 50);
+  const toSlider = (power) => Math.log10(Math.max(power, 0.1)) * 50;
   const fromSlider = (value) => Number((10 ** (value / 50)).toPrecision(2));
   const picking = actions.isPickingHighlight(light);
 
@@ -1139,7 +1213,7 @@ function lightPanel(light, { actions }) {
           max: MAX_LIGHT_SIZE,
           step: SIZE_STEPS,
           value: light.width,
-          format: (value) => `${value}°`,
+          unit: '°',
           title: 'Larger softboxes give softer shadows at the same amount of light',
           oninput: set('width'),
         }),
@@ -1148,7 +1222,7 @@ function lightPanel(light, { actions }) {
           max: MAX_LIGHT_SIZE,
           step: SIZE_STEPS,
           value: light.height,
-          format: (value) => `${value}°`,
+          unit: '°',
           oninput: set('height'),
         }),
         field(
@@ -1168,7 +1242,14 @@ function lightPanel(light, { actions }) {
           min: -50,
           max: 150,
           value: toSlider(light.power),
-          format: (value) => numberFormat.format(fromSlider(value)),
+          digits: 2,
+          toShown: fromSlider,
+          fromShown: toSlider,
+          exact: (power) => {
+            const limited = Math.min(Math.max(power, 0.1), 1000);
+            set('power', false)(limited);
+            return limited;
+          },
           oninput: (value) => set('power')(fromSlider(value)),
         }),
         field(
@@ -1196,13 +1277,19 @@ function viewsPanel({ viewer, actions }) {
   const toSlider = (focal) => (Math.log(focal / FOCAL_MIN) / Math.log(FOCAL_MAX / FOCAL_MIN)) * 100;
   const fromSlider = (value) => FOCAL_MIN * (FOCAL_MAX / FOCAL_MIN) ** (value / 100);
   const clampFocal = (focal) => Math.min(Math.max(focal, FOCAL_MIN), FOCAL_MAX);
-  const focalText = (focal) => (viewer.parallel ? 'parallel' : `${Math.round(focal)} mm`);
   const focal = slider('Focal length', {
     min: 0,
     max: 100,
     step: 0.5,
     value: toSlider(clampFocal(viewer.focalLength)),
-    format: (value) => focalText(fromSlider(value)),
+    unit: 'mm',
+    toShown: (value) => Math.round(fromSlider(value)),
+    fromShown: (focal) => toSlider(clampFocal(focal)),
+    exact: (length) => {
+      const limited = clampFocal(length);
+      viewer.setFocalLength(limited);
+      return limited;
+    },
     disabled: parallel,
     title: 'Long focal lengths show parts with little perspective distortion',
     oninput: (value) => viewer.setFocalLength(fromSlider(value)),
@@ -1269,7 +1356,8 @@ function viewsPanel({ viewer, actions }) {
       for (const key of Object.keys(boxes)) boxes[key].set(current[key]);
       targetBoxes.forEach((box, i) => box.set(current.target[i]));
       const length = viewer.focalLength;
-      focal.set(toSlider(clampFocal(length)), focalText(length));
+      focal.set(toSlider(clampFocal(length)), Math.round(clampFocal(length)));
+      focal.setDisabled(viewer.parallel);
     },
   };
 }
@@ -1294,7 +1382,12 @@ function depthOfFieldPanel({ actions }) {
         min: 0,
         max: F_STOPS.length - 1,
         value: Math.max(F_STOPS.indexOf(camera.fStop), 0),
-        format: (value) => `f/${F_STOPS[value]}`,
+        prefix: 'f/',
+        digits: 1,
+        toShown: (index) => F_STOPS[index],
+        // The nearest f-stop of the lens to a typed number.
+        fromShown: (number) =>
+          F_STOPS.reduce((best, stop, index) => (Math.abs(stop - number) < Math.abs(F_STOPS[best] - number) ? index : best), 0),
         title: 'A small f-number means more blur',
         oninput: (value) => {
           camera.fStop = F_STOPS[value];
@@ -1341,7 +1434,7 @@ function explodeControls(asGroup = true) {
         max: 150,
         step: 1,
         value: Math.round(explode.amount * 100),
-        format: (value) => (value === 0 ? 'assembled' : percent(value)),
+        unit: '%',
         title: 'How far the parts move apart: 100 % doubles their distance from the centre',
         oninput: (value) => {
           explode.amount = value / 100;
@@ -1461,6 +1554,34 @@ function imageSettings(settings, { actions, onchange }) {
             `${size.width} × ${size.height}`,
           ),
     ]),
+    group('job-edges', 'Edge lines', [
+      toggle('Draw edge lines', settings.edges, set('edges'), 'The CAD edges and the outlines of cut faces, drawn over the rendering'),
+      settings.edges
+        ? [
+            field(
+              'Line colour',
+              h('input', {
+                type: 'color',
+                value: settings.edgeColor,
+                onchange: (event) => set('edgeColor')(event.target.value),
+              }),
+            ),
+            slider('Line width', {
+              min: 0.5,
+              max: 6,
+              step: 0.25,
+              value: settings.edgeWidth,
+              unit: 'px',
+              digits: 2,
+              title: 'On a Full HD image; larger images get proportionally wider lines',
+              oninput: (value) => {
+                settings.edgeWidth = value;
+              },
+              onchange: () => onchange(),
+            }),
+          ]
+        : null,
+    ]),
     group('job-quality', 'Quality', [
       field(
         'Samples',
@@ -1526,15 +1647,6 @@ function jobPanel(job, { actions }) {
         job.name = value || 'Render job';
         emit('jobs:live');
       }),
-      segmented(
-        'Render',
-        [
-          ['image', 'Image', 'image'],
-          ['animation', 'Turntable', 'film'],
-        ],
-        job.type,
-        set('type'),
-      ),
       h(
         'p',
         { class: 'hint' },
@@ -1589,7 +1701,7 @@ function adjustControls(render) {
       min: spec.min,
       max: spec.max,
       value: render.adjust[key] || 0,
-      format: (value) => (value > 0 && spec.min < 0 ? `+${value}` : String(value)),
+
       oninput: (value) => {
         render.adjust[key] = value;
         emit('renders:live');
@@ -1670,7 +1782,7 @@ function renderPanelFor(render, { actions }) {
       min: 1,
       max: frames,
       value: render.shownFrame + 1,
-      format: (value) => `${value} of ${frames}`,
+      unit: `of ${frames}`,
       oninput: (value) => actions.showFrame(render, value - 1),
     });
     player = h('div', null, scrub, h('div', { class: 'button-column' }, play));
