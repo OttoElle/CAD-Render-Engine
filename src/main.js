@@ -3,7 +3,7 @@ import { Viewer } from './viewer.js';
 import { drawGuides, loadGuides, saveGuides, GUIDE_TYPES } from './guides.js';
 import { openMenu } from './menu.js';
 import { SHORTCUT_ACTIONS, shortcutFor, shortcutLabel } from './shortcuts.js';
-import { renderSettings, isRecordingShortcut, loadZoomToCenter } from './settings.js';
+import { renderSettings, isRecordingShortcut, loadZoomToCenter, loadLevelHorizon } from './settings.js';
 import { ViewCube } from './viewcube.js';
 import { loadStepFile } from './step-loader.js';
 import { createLoadingIndicator } from './loading.js';
@@ -133,6 +133,20 @@ const settingsEl = $('#settings');
 $('#fit-btn').append(icon('fit', 16), 'Fit');
 $('#center-btn').append(icon('center', 16), 'Centre');
 viewer.controls.zoomToCenter = loadZoomToCenter();
+viewer.controls.levelHorizon = loadLevelHorizon();
+const pivotMarkerEl = $('#pivot-marker');
+/** Shows the point the view turns around while dragging, so the rotation is easy to follow. */
+function updatePivotMarker() {
+  const pivot = viewer.controls.activePivot;
+  pivotMarkerEl.hidden = !pivot;
+  if (!pivot) return;
+  viewer.camera.updateMatrixWorld();
+  const ndc = pivot.clone().project(viewer.camera);
+  pivotMarkerEl.style.left = `${((ndc.x + 1) / 2) * viewer.canvas.clientWidth}px`;
+  pivotMarkerEl.style.top = `${((1 - ndc.y) / 2) * viewer.canvas.clientHeight}px`;
+}
+viewer.controls.addEventListener('start', updatePivotMarker);
+viewer.controls.addEventListener('end', updatePivotMarker);
 edgesBtn.append(icon('edges', 16), 'Edges');
 axesBtn.append(icon('axes', 16), 'Axes');
 guidesBtn.append(icon('guides', 16), 'Guides');
@@ -1847,6 +1861,7 @@ viewer.onViewChange = () => {
   viewCube.update();
   updateOutputFrame();
   updateFocusMarker();
+  updatePivotMarker();
   // An open render job takes the camera along.
   const job = applyingRenderView ? null : selectedJob();
   if (job) job.camera = viewer.getViewState();
@@ -2074,6 +2089,7 @@ function drawSettings() {
     onChange: () => {
       updateShortcutTitles();
       viewer.controls.zoomToCenter = loadZoomToCenter();
+      viewer.controls.levelHorizon = loadLevelHorizon();
       emit('selection');
     },
   });

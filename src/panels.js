@@ -1611,6 +1611,21 @@ function imageSettings(settings, { actions, onchange }) {
 }
 
 /** Where renderings run: graphics card or processor, and the gentle mode. Shown in the app settings. */
+/** How dragging rotates the view, an app setting (see settings.js and cad-controls.js). */
+export function rotateControls(levelHorizon, onchange) {
+  return field(
+    'Rotating',
+    selectControl(
+      [
+        ['free', 'Free, like Onshape'],
+        ['level', 'Keep the horizon level'],
+      ],
+      levelHorizon ? 'level' : 'free',
+      (value) => onchange(value === 'level'),
+    ),
+  );
+}
+
 /** Where the mouse wheel zooms to, an app setting (see settings.js). */
 export function zoomControls(zoomToCenter, onchange) {
   return field(

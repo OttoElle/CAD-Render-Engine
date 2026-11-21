@@ -1,9 +1,27 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
-import { deviceControls, zoomControls } from './panels.js';
+import { deviceControls, zoomControls, rotateControls } from './panels.js';
 import { SHORTCUT_ACTIONS, shortcutLabel, setShortcut, resetShortcuts, shortcutsAreDefault } from './shortcuts.js';
 
 const ZOOM_KEY = 'clearcoat:zoomToCenter';
+const LEVEL_KEY = 'clearcoat:levelHorizon';
+
+/** Whether rotating keeps the horizon level (turntable) rather than turning freely; kept in this browser. */
+export function loadLevelHorizon() {
+  try {
+    return localStorage.getItem(LEVEL_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveLevelHorizon(value) {
+  try {
+    localStorage.setItem(LEVEL_KEY, String(value));
+  } catch {
+    // Only a preference; it applies until the page is reloaded.
+  }
+}
 
 /** Whether the mouse wheel zooms towards the middle of the view rather than the pointer; kept in this browser. */
 export function loadZoomToCenter() {
@@ -86,6 +104,10 @@ export function renderSettings(host, { onClose, onChange }) {
           'div',
           { class: 'dialog-body' },
           h('h3', { class: 'section-title' }, 'Navigation'),
+          rotateControls(loadLevelHorizon(), (value) => {
+            saveLevelHorizon(value);
+            onChange();
+          }),
           zoomControls(loadZoomToCenter(), (value) => {
             saveZoomToCenter(value);
             onChange();

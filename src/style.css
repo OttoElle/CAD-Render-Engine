@@ -338,6 +338,19 @@ body {
   pointer-events: none;
 }
 
+#pivot-marker {
+  position: absolute;
+  z-index: 1;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(16, 24, 40, 0.25);
+  pointer-events: none;
+}
+
 #dropzone {
   position: absolute;
   z-index: 1;

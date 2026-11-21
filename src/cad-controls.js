@@ -5,8 +5,11 @@ const UP = new THREE.Vector3(0, 1, 0);
 /**
  * Mouse navigation as in CAD programs:
  * - left drag rotates around the point of the model under the cursor (or the
- *   model's centre), sideways around the vertical axis and up and down
- *   without a stop, right over the top;
+ *   model's centre). Freely by default, like Onshape: sideways around the
+ *   screen's vertical, up and down around the screen's horizontal, so the
+ *   model always follows the mouse. With `levelHorizon`, sideways turns around
+ *   the world's vertical instead, which keeps the horizon level (turntable);
+ *   up and down goes on without a stop, right over the top;
  * - right or middle drag, or Shift with the left button, pans;
  * - the wheel zooms towards the cursor, or towards the middle of the view
  *   when `zoomToCenter` is set, so a centred model stays centred.
@@ -25,7 +28,12 @@ export class CadControls extends THREE.EventDispatcher {
     this.minDistance = 0.01;
     this.maxDistance = Infinity;
     this.enabled = true;
-    this.rotateSpeed = 0.006;
+    /** Rotation per pixel, as a share of a half turn across the viewport's height. */
+    this.rotateSpeed = 1.1;
+    /** Turntable rotation around the world's vertical instead of free rotation (see the class comment). */
+    this.levelHorizon = false;
+    /** The point the current drag rotates around, for showing it; null when not rotating. */
+    this.activePivot = null;
     /** Wheel zoom keeps the middle of the view in place instead of the point under the cursor. */
     this.zoomToCenter = false;
     /** Returns the world point of the model under the given client position, or null. */
@@ -91,6 +99,10 @@ export class CadControls extends THREE.EventDispatcher {
     const dx = event.clientX - drag.x;
     const dy = event.clientY - drag.y;
     if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+    if (!drag.moved && drag.mode === 'rotate') {
+      this.activePivot = drag.pivot;
+      this.dispatchEvent({ type: 'start' });
+    }
     drag.moved = true;
     drag.x = event.clientX;
     drag.y = event.clientY;
@@ -103,6 +115,7 @@ export class CadControls extends THREE.EventDispatcher {
     this.element.releasePointerCapture?.(event.pointerId);
     const moved = this._drag.moved;
     this._drag = null;
+    this.activePivot = null;
     if (moved) this.dispatchEvent({ type: 'end' });
   }
 
@@ -142,11 +155,13 @@ export class CadControls extends THREE.EventDispatcher {
     const orientation = this._orientation();
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(orientation);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
-    // Sideways around the vertical axis, so the horizon stays level; upside down it turns the other way.
-    const vertical = up.y >= 0 ? UP : UP.clone().negate();
+    // The same feel on any window size: a drag across the viewport's height turns about 200°.
+    const perPixel = (Math.PI * this.rotateSpeed) / Math.max(this.element.clientHeight, 200);
+    // Free: around the screen's own axes. Level: sideways around the world's vertical; upside down it turns the other way.
+    const vertical = !this.levelHorizon ? up : up.y >= 0 ? UP : UP.clone().negate();
     const turn = new THREE.Quaternion()
-      .setFromAxisAngle(vertical, -dx * this.rotateSpeed)
-      .multiply(new THREE.Quaternion().setFromAxisAngle(right, -dy * this.rotateSpeed));
+      .setFromAxisAngle(vertical, -dx * perPixel)
+      .multiply(new THREE.Quaternion().setFromAxisAngle(right, -dy * perPixel));
     this._turn(turn, pivot);
   }
 

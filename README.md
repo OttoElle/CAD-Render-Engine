@@ -57,6 +57,9 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
   als Einstellung, Kantenlinien im Rendering ohne verdeckte Kanten und mit
   Umrisslinien gewölbter Flächen, Render-Jobs und gespeicherte Ansichten auf die
   aktuelle Ansicht aktualisieren
+- [x] **Schritt 21:** Freies Drehen wie in Onshape als Voreinstellung
+  (Drehteller mit waagrechtem Horizont als Einstellung), Drehgeschwindigkeit
+  passend zur Fenstergröße, sichtbarer Drehpunkt beim Ziehen
 
 ## Ablauf
 
@@ -241,7 +244,7 @@ online also nicht und lassen sich über Projektdateien (`.clearcoat`) mitnehmen.
 
 | Aktion | Eingabe |
 | --- | --- |
-| Drehen (um den Punkt unter der Maus, ohne Anschlag) | Linke Maustaste ziehen |
+| Drehen (um den Punkt unter der Maus, sonst um die Modellmitte; ein Punkt zeigt den Drehpunkt) | Linke Maustaste ziehen |
 | Verschieben | Rechte oder mittlere Maustaste ziehen, oder Shift + linke Maustaste |
 | Zoomen (zum Mauszeiger hin oder, unter dem Zahnrad einstellbar, zur Bildmitte) | Mausrad |
 | Standardansichten | Flächen, Kanten und Ecken des Würfels unten rechts anklicken |
@@ -256,7 +259,11 @@ online also nicht und lassen sich über Projektdateien (`.clearcoat`) mitnehmen.
 | Werkzeug zum Verschieben und Drehen der gewählten Bauteile | `M` |
 | Weitere Bauteile auswählen | Strg oder Shift + Klick |
 
-Die Tastenkürzel lassen sich unter dem Zahnrad oben rechts ändern.
+Die Tastenkürzel lassen sich unter dem Zahnrad oben rechts ändern. Dort
+steht auch, wie gedreht wird: frei wie in Onshape (Voreinstellung; das Modell
+folgt der Maus in jede Richtung) oder mit waagrechtem Horizont wie auf einem
+Drehteller (seitlich um die Hochachse, ohne Anschlag oben und unten), und
+wohin das Mausrad zoomt.
 
 ## Aufbau
 
