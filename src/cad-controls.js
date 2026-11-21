@@ -8,7 +8,8 @@ const UP = new THREE.Vector3(0, 1, 0);
  *   model's centre), sideways around the vertical axis and up and down
  *   without a stop, right over the top;
  * - right or middle drag, or Shift with the left button, pans;
- * - the wheel zooms towards the cursor.
+ * - the wheel zooms towards the cursor, or towards the middle of the view
+ *   when `zoomToCenter` is set, so a centred model stays centred.
  *
  * The camera always looks at `target`. Its orientation is "levelled look at
  * target, then rolled by `roll`", which the viewer re-applies after update().
@@ -25,6 +26,8 @@ export class CadControls extends THREE.EventDispatcher {
     this.maxDistance = Infinity;
     this.enabled = true;
     this.rotateSpeed = 0.006;
+    /** Wheel zoom keeps the middle of the view in place instead of the point under the cursor. */
+    this.zoomToCenter = false;
     /** Returns the world point of the model under the given client position, or null. */
     this.pickPoint = pickPoint;
     /** Returns the point to rotate around when the cursor is not over the model. */
@@ -165,6 +168,12 @@ export class CadControls extends THREE.EventDispatcher {
     const next = THREE.MathUtils.clamp(distance * factor, this.minDistance, this.maxDistance);
     const scale = next / distance;
     if (Math.abs(scale - 1) < 1e-6) return;
+    if (this.zoomToCenter) {
+      // The camera looks at the target, so the target is the middle of the view.
+      this.camera.position.sub(this.target).multiplyScalar(scale).add(this.target);
+      this.dispatchEvent({ type: 'change' });
+      return;
+    }
     // The point under the cursor on the plane through the target.
     this.camera.updateMatrixWorld();
     this._raycaster.setFromCamera(ndc, this.camera);

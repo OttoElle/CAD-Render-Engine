@@ -3,7 +3,7 @@ import { Viewer } from './viewer.js';
 import { drawGuides, loadGuides, saveGuides, GUIDE_TYPES } from './guides.js';
 import { openMenu } from './menu.js';
 import { SHORTCUT_ACTIONS, shortcutFor, shortcutLabel } from './shortcuts.js';
-import { renderSettings, isRecordingShortcut } from './settings.js';
+import { renderSettings, isRecordingShortcut, loadZoomToCenter } from './settings.js';
 import { ViewCube } from './viewcube.js';
 import { loadStepFile } from './step-loader.js';
 import { createLoadingIndicator } from './loading.js';
@@ -131,6 +131,8 @@ let settingsOpen = false;
 const settingsEl = $('#settings');
 
 $('#fit-btn').append(icon('fit', 16), 'Fit');
+$('#center-btn').append(icon('center', 16), 'Centre');
+viewer.controls.zoomToCenter = loadZoomToCenter();
 edgesBtn.append(icon('edges', 16), 'Edges');
 axesBtn.append(icon('axes', 16), 'Axes');
 guidesBtn.append(icon('guides', 16), 'Guides');
@@ -1741,6 +1743,17 @@ const actions = {
     deleteFromTree(`light:${id}`, 'lighting', () => {
       state.lighting.lights = state.lighting.lights.filter((item) => item.id !== id);
     }),
+  /** Gives a saved view or a render job the camera as it is now. */
+  updateView: (view) => {
+    Object.assign(view, viewer.getViewState());
+    emit('views');
+    setStatus(`${view.name} now shows the current view`, { timeout: 2500 });
+  },
+  updateJobView: (job) => {
+    job.camera = viewer.getViewState();
+    emit('jobs');
+    setStatus(`${job.name} now uses the current view`, { timeout: 2500 });
+  },
   deleteView: (id) =>
     deleteFromTree(`view:${id}`, 'views', () => {
       state.views = state.views.filter((item) => item.id !== id);
@@ -1989,6 +2002,7 @@ window.addEventListener('drop', (event) => {
 // --- Viewport tools -----------------------------------------------------------
 
 $('#fit-btn').addEventListener('click', () => viewer.fit());
+$('#center-btn').addEventListener('click', () => viewer.center());
 projectChip.addEventListener('click', () => actions.editProject());
 projectsBtn.addEventListener('click', () => showOverview(!overviewOpen));
 
@@ -2035,7 +2049,7 @@ function toggleGizmo() {
 
 /** Tooltips of the toolbar name the current keys. */
 function updateShortcutTitles() {
-  const buttons = { fit: '#fit-btn', edges: '#edges-btn', axes: '#axes-btn', guides: '#guides-btn' };
+  const buttons = { fit: '#fit-btn', center: '#center-btn', edges: '#edges-btn', axes: '#axes-btn', guides: '#guides-btn' };
   for (const [action, selector] of Object.entries(buttons)) {
     $(selector).title = `${SHORTCUT_ACTIONS[action].label} (${shortcutLabel(action)})`;
   }
@@ -2059,6 +2073,7 @@ function drawSettings() {
     onClose: () => showSettings(false),
     onChange: () => {
       updateShortcutTitles();
+      viewer.controls.zoomToCenter = loadZoomToCenter();
       emit('selection');
     },
   });
@@ -2081,6 +2096,7 @@ window.addEventListener('keydown', (event) => {
   }
   const shortcut = shortcutFor(event.key);
   if (shortcut === 'fit') viewer.fit();
+  if (shortcut === 'center') viewer.center();
   if (shortcut === 'edges') toggleEdges();
   if (shortcut === 'axes') toggleAxes();
   if (shortcut === 'guides') setGuides({ visible: !guides.visible });

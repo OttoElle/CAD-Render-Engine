@@ -1,7 +1,26 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
-import { deviceControls } from './panels.js';
+import { deviceControls, zoomControls } from './panels.js';
 import { SHORTCUT_ACTIONS, shortcutLabel, setShortcut, resetShortcuts, shortcutsAreDefault } from './shortcuts.js';
+
+const ZOOM_KEY = 'clearcoat:zoomToCenter';
+
+/** Whether the mouse wheel zooms towards the middle of the view rather than the pointer; kept in this browser. */
+export function loadZoomToCenter() {
+  try {
+    return localStorage.getItem(ZOOM_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function saveZoomToCenter(value) {
+  try {
+    localStorage.setItem(ZOOM_KEY, String(value));
+  } catch {
+    // Only a preference; it applies until the page is reloaded.
+  }
+}
 
 /** The action whose key is being recorded, or null. */
 let recording = null;
@@ -66,6 +85,11 @@ export function renderSettings(host, { onClose, onChange }) {
         h(
           'div',
           { class: 'dialog-body' },
+          h('h3', { class: 'section-title' }, 'Navigation'),
+          zoomControls(loadZoomToCenter(), (value) => {
+            saveZoomToCenter(value);
+            onChange();
+          }),
           h('h3', { class: 'section-title' }, 'Rendering'),
           deviceControls(),
           h('h3', { class: 'section-title' }, 'Keyboard shortcuts'),

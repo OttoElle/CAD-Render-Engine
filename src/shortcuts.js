@@ -5,6 +5,7 @@
 
 export const SHORTCUT_ACTIONS = {
   fit: { label: 'Fit the model into the view', key: 'f' },
+  center: { label: 'Centre the model, keeping the zoom', key: 'c' },
   edges: { label: 'Show or hide edges', key: 'e' },
   axes: { label: 'Show or hide the coordinate system', key: 'a' },
   guides: { label: 'Show or hide guide lines', key: 'g' },

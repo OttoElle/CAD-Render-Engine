@@ -53,6 +53,10 @@ Die Modelle verlassen den Rechner nicht, und es gibt kein Backend.
   Schraffur mit Linienbreite, automatischer Kontrastfarbe und Umrandung der
   Schnittflächen, überlappende Bauteile im Schnitt rot markiert, Kantenlinien
   im Rendering, Bild oder Drehteller direkt über das Plus bei Output
+- [x] **Schritt 20:** Zentrieren getrennt vom Einpassen, Zoomen zur Bildmitte
+  als Einstellung, Kantenlinien im Rendering ohne verdeckte Kanten und mit
+  Umrisslinien gewölbter Flächen, Render-Jobs und gespeicherte Ansichten auf die
+  aktuelle Ansicht aktualisieren
 
 ## Ablauf
 
@@ -175,9 +179,11 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
    einen Job an: ein Bild (Image), einen Drehteller (Turntable) oder, mit
    gespeicherten Ansichten, ein Bild pro Ansicht. Das Play-Symbol schickt alle
    Jobs in die Warteschlange. Unter „Edge lines“ bekommt ein Job auf Wunsch
-   Kantenlinien wie in einer CAD-Ansicht (CAD-Kanten und Umrisse der
-   Schnittflächen, verdeckte Kanten bleiben unsichtbar), mit Farbe und
-   Linienbreite; sie werden nach dem Rendern über das Bild gelegt. Der Drehteller dreht
+   Kantenlinien wie in einer CAD-Ansicht (CAD-Kanten, Umrisslinien gewölbter
+   Flächen und Umrisse der Schnittflächen, verdeckte Kanten bleiben
+   unsichtbar), mit Farbe und Linienbreite; sie werden nach dem Rendern über
+   das Bild gelegt. „⋯“ an einem Job oder einer gespeicherten Ansicht und dann
+   „Update to the current view“ übernimmt die Kamera, wie sie gerade ist. Der Drehteller dreht
    das Modell einmal um die senkrechte Achse (24 bis 120 Bilder, eine Umdrehung
    in 4 bis 12 Sekunden); den Blickwinkel bestimmt die Kamerahöhe.
 7. **Renderings (Renders):** Fertige Bilder bleiben mit dem Projekt
@@ -237,19 +243,20 @@ online also nicht und lassen sich über Projektdateien (`.clearcoat`) mitnehmen.
 | --- | --- |
 | Drehen (um den Punkt unter der Maus, ohne Anschlag) | Linke Maustaste ziehen |
 | Verschieben | Rechte oder mittlere Maustaste ziehen, oder Shift + linke Maustaste |
-| Zoomen (zum Mauszeiger hin) | Mausrad |
+| Zoomen (zum Mauszeiger hin oder, unter dem Zahnrad einstellbar, zur Bildmitte) | Mausrad |
 | Standardansichten | Flächen, Kanten und Ecken des Würfels unten rechts anklicken |
 | In 15°-Schritten drehen | Pfeile am Würfel |
 | In 15°-Schritten rollen | Runde Pfeile am Würfel |
 | Zurück zur Standardansicht | Haus am Würfel |
-| Modell einpassen | `F` |
+| Modell einpassen (zentrieren und zoomen) | `F` |
+| Modell zentrieren, Zoom bleibt | `C` |
 | Kanten ein- und ausblenden | `E` |
 | Koordinatensystem ein- und ausblenden | `A` |
 | Hilfslinien ein- und ausblenden (Art über „Guides“) | `G` |
 | Werkzeug zum Verschieben und Drehen der gewählten Bauteile | `M` |
 | Weitere Bauteile auswählen | Strg oder Shift + Klick |
 
-Die fünf Tastenkürzel lassen sich unter dem Zahnrad oben rechts ändern.
+Die Tastenkürzel lassen sich unter dem Zahnrad oben rechts ändern.
 
 ## Aufbau
 

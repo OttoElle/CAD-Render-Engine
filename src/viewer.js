@@ -629,6 +629,12 @@ export class Viewer {
     this._frame(this.camera.position.clone().sub(this.controls.target).normalize());
   }
 
+  /** Moves the model into the middle of the view (and the output frame) without changing the zoom. */
+  center() {
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    this._moveCamera(this.bounds.center.clone(), offset.clone().normalize(), offset.length(), true);
+  }
+
   _frame(direction) {
     const { center, radius } = this.bounds;
     // Fit into the output frame, which is what the final image shows.

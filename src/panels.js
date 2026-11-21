@@ -1611,6 +1611,21 @@ function imageSettings(settings, { actions, onchange }) {
 }
 
 /** Where renderings run: graphics card or processor, and the gentle mode. Shown in the app settings. */
+/** Where the mouse wheel zooms to, an app setting (see settings.js). */
+export function zoomControls(zoomToCenter, onchange) {
+  return field(
+    'Mouse wheel zooms',
+    selectControl(
+      [
+        ['pointer', 'Towards the pointer'],
+        ['center', 'Towards the middle'],
+      ],
+      zoomToCenter ? 'center' : 'pointer',
+      (value) => onchange(value === 'center'),
+    ),
+  );
+}
+
 export function deviceControls() {
   const { output } = state;
   const set = (key) => (value) => {

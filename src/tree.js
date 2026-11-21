@@ -253,7 +253,10 @@ export function renderTree(container, actions) {
           icon: 'bookmark',
           actions: [
             { icon: 'play', title: 'Show this view', run: () => actions.showView(view) },
-            more([remove('Delete view', () => actions.deleteView(view.id))]),
+            more([
+              { label: 'Update to the current view', icon: 'refresh', run: () => actions.updateView(view) },
+              remove('Delete view', () => actions.deleteView(view.id)),
+            ]),
           ],
         })),
       ],
@@ -286,6 +289,7 @@ export function renderTree(container, actions) {
           actions: [
             actions.renderSupported ? { icon: 'play', title: 'Render this job', run: () => actions.renderJob(job) } : null,
             more([
+              { label: 'Update to the current view', icon: 'refresh', run: () => actions.updateJobView(job) },
               { label: 'Duplicate', icon: 'copy', run: () => actions.duplicateJob(job) },
               remove('Delete job', () => actions.deleteJob(job)),
             ]),
