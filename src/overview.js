@@ -217,8 +217,7 @@ function galleryDialog(actions, record, key) {
     const image = url
       ? h('div', { class: 'gallery-image' }, h('img', { src: url, alt: shown.name, style: { filter: css.filter } }), css.vignette ? h('div', { class: 'vignette', style: { background: css.vignette } }) : null)
       : h('p', { class: 'render-placeholder' }, 'Loading …');
-    const format = shown.format || 'png';
-    const formats = [format, ...Object.keys(FILE_FORMATS).filter((item) => item !== format)];
+    const formats = Object.keys(FILE_FORMATS);
     body = h(
       'div',
       { class: 'dialog-body gallery-large' },
@@ -239,7 +238,9 @@ function galleryDialog(actions, record, key) {
               videoSupported()
                 ? h('button', { class: 'primary', disabled: !ready, onclick: () => actions.saveGalleryVideo() }, icon('download', 15), 'Video')
                 : null,
-              h('button', { disabled: !ready, onclick: () => actions.saveGalleryRender(format) }, icon('download', 15), `Images (${format.toUpperCase()}, ZIP)`),
+              ...formats.map((item) =>
+                h('button', { disabled: !ready, onclick: () => actions.saveGalleryRender(item) }, icon('download', 15), `Images (${item.toUpperCase()}, ZIP)`),
+              ),
             ]
           : formats.map((item, i) =>
               h(

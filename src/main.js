@@ -606,7 +606,6 @@ function queueRender(job) {
     width,
     height,
     transparent: output.transparent,
-    format: output.format,
     denoised: false,
     note: null,
     deviceName: null,
@@ -927,7 +926,7 @@ async function exporting(text, run) {
 }
 
 /** Saves one rendering in the given format; a turntable series as a ZIP archive. */
-function saveRender(render, format = render.format || 'png', base = fileBase()) {
+function saveRender(render, format = 'png', base = fileBase()) {
   return exporting('Saving images …', async () => {
     await ensureRenderLoaded(render);
     const files = await renderFiles(render, format, { base });

@@ -95,8 +95,6 @@ export const defaultOutput = () => ({
   denoise: true,
   device: 'gpu',
   gentle: false,
-  /** File format for saving: 'png' or 'jpg' (see FILE_FORMATS in export.js). */
-  format: 'png',
   /** Edge lines over the rendering: colour and width in pixels on a Full HD image. */
   edges: false,
   edgeColor: '#1f2328',
@@ -120,7 +118,6 @@ export const JOB_SETTINGS = [
   'height',
   'quality',
   'denoise',
-  'format',
   'transparent',
   'edges',
   'edgeColor',

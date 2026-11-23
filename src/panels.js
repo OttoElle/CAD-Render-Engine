@@ -1593,19 +1593,8 @@ function imageSettings(settings, { actions, onchange }) {
       ),
       toggle('Denoise', settings.denoise, set('denoise'), 'Smooths the remaining noise at the end of the rendering'),
     ]),
-    group('job-file', 'File', [
-      field(
-        'File format',
-        selectControl(
-          Object.entries(FILE_FORMATS).map(([key, value]) => [key, value.label]),
-          settings.format,
-          set('format'),
-        ),
-      ),
-      toggle('Transparent background', settings.transparent, set('transparent'), 'Without background and floor; PNG only'),
-      settings.transparent && settings.format === 'jpg'
-        ? h('p', { class: 'hint' }, 'JPG has no transparency: images are put on white when saved.')
-        : null,
+    group('job-background', 'Background', [
+      toggle('Transparent background', settings.transparent, set('transparent'), 'Without background and floor; save as PNG to keep it'),
     ]),
   ];
 }
@@ -1844,7 +1833,9 @@ function renderPanelFor(render, { actions }) {
     buttons.append(deleteButton('Take out of the queue', () => actions.deleteRender(render)));
   } else {
     if (render.status === 'done') {
-      const chosen = render.format || 'png';
+      const formats = Object.keys(FILE_FORMATS);
+      const formatTitle = (format) =>
+        format === 'jpg' && render.transparent ? `${FILE_FORMATS[format].label}; no transparency, put on white` : FILE_FORMATS[format].label;
       if (count) {
         if (videoSupported()) {
           buttons.append(
@@ -1856,21 +1847,23 @@ function renderPanelFor(render, { actions }) {
             ),
           );
         }
-        buttons.append(
-          h(
-            'button',
-            { onclick: () => actions.saveRender(render, chosen), title: 'All images in a ZIP file' },
-            icon('download', 15),
-            `${FILE_FORMATS[chosen].extension.toUpperCase()} images`,
-          ),
-        );
-      } else {
-        // The format chosen in the job comes first.
-        for (const format of [chosen, ...Object.keys(FILE_FORMATS).filter((key) => key !== chosen)]) {
+        for (const format of formats) {
           buttons.append(
             h(
               'button',
-              { class: format === chosen ? 'primary' : null, onclick: () => actions.saveRender(render, format), title: `Save as ${FILE_FORMATS[format].label}` },
+              { onclick: () => actions.saveRender(render, format), title: `All images in a ZIP file, ${formatTitle(format)}` },
+              icon('download', 15),
+              `${FILE_FORMATS[format].extension.toUpperCase()} images`,
+            ),
+          );
+        }
+      } else {
+        // The file format is chosen only here, when saving; PNG comes first.
+        for (const format of formats) {
+          buttons.append(
+            h(
+              'button',
+              { class: format === 'png' ? 'primary' : null, onclick: () => actions.saveRender(render, format), title: `Save as ${formatTitle(format)}` },
               icon('download', 15),
               FILE_FORMATS[format].extension.toUpperCase(),
             ),

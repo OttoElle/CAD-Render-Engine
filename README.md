@@ -174,7 +174,8 @@ Das Zahnrad oben rechts öffnet die Einstellungen der App: wo gerendert wird
    Tiefenunschärfe (Depth of field: Blende und Fokuspunkt) hinzu.
 6. **Output:** Hier entstehen Render-Jobs. Ein Job ist ein Bild oder ein
    Drehteller und merkt sich Kamera, Seitenverhältnis,
-   Auflösung, Qualität, Dateiformat und Transparenz. Solange ein Job offen
+   Auflösung, Qualität und Transparenz. PNG oder JPG wählt man erst beim
+   Speichern des fertigen Renderings. Solange ein Job offen
    ist, nimmt er die Kamera mit, und ein Rahmen zeigt den Bildausschnitt.
    „Guides“ oben wählt Hilfslinien über dem Bildausschnitt (Drittel, Goldener
    Schnitt, Raster oder Mitte und Diagonalen) oder schaltet sie aus, `G`

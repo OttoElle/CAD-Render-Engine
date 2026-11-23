@@ -27,7 +27,6 @@ import {
   PART_EXPLODE_DIRECTIONS,
   defaultPartExplode,
 } from './explode.js';
-import { FILE_FORMATS } from './export.js';
 import { HATCH_PATTERNS } from './hatch.js';
 import { getLightPreset, presetLights, sanitizeLight } from './environment.js';
 
@@ -205,7 +204,6 @@ function sanitizeImageSettings(settings) {
   if (!OUTPUT_RESOLUTIONS[settings.resolution]) settings.resolution = 1920;
   for (const key of ['width', 'height']) settings[key] = Math.min(Math.max(Math.round(Number(settings[key]) || 1920), 64), 8192);
   if (!QUALITY[settings.quality]) settings.quality = 'standard';
-  if (!FILE_FORMATS[settings.format]) settings.format = 'png';
   if (!TURNTABLE_FRAMES.includes(settings.turntableFrames)) settings.turntableFrames = 36;
   if (!TURNTABLE_SECONDS.includes(settings.turntableSeconds)) settings.turntableSeconds = 6;
   return settings;
@@ -245,7 +243,6 @@ export function sanitizeRenderMeta(saved) {
     turntable: Number(saved.turntable) || 0,
     frameCount: Number(saved.frameCount) || 0,
     turntableSeconds: TURNTABLE_SECONDS.includes(saved.turntableSeconds) ? saved.turntableSeconds : 6,
-    format: FILE_FORMATS[saved.format] ? saved.format : 'png',
     createdAt: Number(saved.createdAt) || Date.now(),
     adjust,
   };
@@ -267,7 +264,6 @@ export function renderMeta(render) {
     turntable: render.turntable,
     frameCount: render.turntable ? render.frames.length : 0,
     turntableSeconds: render.turntableSeconds,
-    format: render.format,
     createdAt: render.createdAt,
     adjust: { ...render.adjust },
   };
