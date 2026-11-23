@@ -272,7 +272,10 @@ wohin das Mausrad zoomt.
   [occt-import-js](https://github.com/kovacsv/occt-import-js)) in einem Web
   Worker und berechnet die CAD-Kanten aus den Flächengrenzen.
 - `src/step-loader.js` wandelt das Ergebnis in three.js-Geometrie um, ein Mesh
-  pro Bauteil.
+  pro Bauteil. Es verteilt die Umwandlung auf zwei Worker: Beim Start werden
+  die Modelle der gespeicherten Projekte still im Hintergrund vorbereitet
+  (eine Datei nach der anderen, im Speicher bis 1,5 GB), damit sie danach
+  sofort aufgehen. Was der Nutzer gerade öffnet oder hochlädt, geht immer vor.
 - `src/viewer.js` ist die Echtzeit-Ansicht (WebGL) mit Kamera, Boden,
   Bildausschnitt und Achsen, `src/cad-controls.js` die
   Maussteuerung, `src/viewcube.js` der Steuerungswürfel, `src/icons.js` die Symbole.

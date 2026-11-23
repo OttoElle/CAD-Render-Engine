@@ -17,6 +17,9 @@ const STAGES = {
   build: { from: 0.96, to: 1, text: 'Preparing the view' },
 };
 
+/** The card only shows when loading takes longer than this. */
+const SHOW_DELAY_MS = 250;
+
 const SPEED_KEY = 'clearcoat.importSpeed';
 /** Milliseconds per megabyte of STEP text, until this computer has measured its own. */
 const DEFAULT_MS_PER_MB = 4000;
@@ -49,6 +52,7 @@ export function createLoadingIndicator(host) {
 
   let current = null;
   let frame = 0;
+  let showTimer = 0;
 
   const draw = () => {
     if (!current) return;
@@ -77,7 +81,13 @@ export function createLoadingIndicator(host) {
     const shown = current && fileIndex > 0 ? current.shown : 0;
     current = { stage: 'read', done: 0, total: 0, size: file.size, fileIndex, fileCount, shown, parseStart: 0, expected: 1 };
     title.textContent = fileCount > 1 ? `Loading ${file.name} (${fileIndex + 1} of ${fileCount})` : `Loading ${file.name}`;
-    node.hidden = false;
+    // A file converted ahead of time is ready at once; the card would only flash.
+    if (node.hidden && !showTimer) {
+      showTimer = setTimeout(() => {
+        showTimer = 0;
+        if (current) node.hidden = false;
+      }, SHOW_DELAY_MS);
+    }
     cancelAnimationFrame(frame);
     draw();
   };
@@ -85,7 +95,8 @@ export function createLoadingIndicator(host) {
   const update = ({ stage, done, total }) => {
     if (!current || !STAGES[stage]) return;
     const now = performance.now();
-    if (current.stage === 'parse' && stage !== 'parse') {
+    // A file already being converted in the background joins midway; its timing says nothing.
+    if (current.stage === 'parse' && stage !== 'parse' && current.timed) {
       // Remember how fast this computer converts, for the next estimate.
       const megabytes = Math.max(current.size / 1e6, 0.05);
       const measured = (now - current.parseStart) / megabytes;
@@ -93,6 +104,7 @@ export function createLoadingIndicator(host) {
     }
     if (stage === 'parse' && current.stage !== 'parse') {
       current.parseStart = now;
+      current.timed = current.stage === 'engine';
       current.expected = Math.max((current.size / 1e6) * loadSpeed(), 300);
     }
     Object.assign(current, { stage, done, total });
@@ -118,6 +130,8 @@ export function createLoadingIndicator(host) {
         if (owner !== handle) return;
         owner = null;
         current = null;
+        clearTimeout(showTimer);
+        showTimer = 0;
         cancelAnimationFrame(frame);
         node.hidden = true;
       },

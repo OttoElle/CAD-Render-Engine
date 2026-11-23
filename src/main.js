@@ -5,7 +5,7 @@ import { openMenu } from './menu.js';
 import { SHORTCUT_ACTIONS, shortcutFor, shortcutLabel } from './shortcuts.js';
 import { renderSettings, isRecordingShortcut, loadZoomToCenter, loadLevelHorizon } from './settings.js';
 import { ViewCube } from './viewcube.js';
-import { loadStepFile } from './step-loader.js';
+import { loadStepFile, preloadStepFile, reprioritizeImports } from './step-loader.js';
 import { createLoadingIndicator } from './loading.js';
 import { getMaterialDef, resolveLook } from './materials.js';
 import { loadHdriFile, getLightPreset, presetLights, newLight } from './environment.js';
@@ -1109,8 +1109,10 @@ async function loadModel(file, { record, store }) {
   const started = performance.now();
   const progress = beginLoading(store ? 1 : 1 + addedFileCount(record));
   progress.file(file, 0);
+  // While the overview covers the project, its model loads like background work.
+  const alive = () => token === projectToken && !overviewOpen;
   try {
-    const parts = await loadStepFile(file, progress.progress);
+    const parts = await loadStepFile(file, progress.progress, { alive });
     if (token !== projectToken) return;
     // Parts the user added from further files come after those of the model, in the order they were added.
     const added = [];
@@ -1123,7 +1125,7 @@ async function loadModel(file, { record, store }) {
           break;
         }
         progress.file(extra, i + 1);
-        const extraParts = await loadStepFile(extra, progress.progress);
+        const extraParts = await loadStepFile(extra, progress.progress, { alive });
         if (token !== projectToken) return;
         appendParts(parts, extraParts);
         added.push({ name: extra.name, partCount: extraParts.length });
@@ -1205,7 +1207,7 @@ async function addPartFile(file) {
   const progress = beginLoading();
   progress.file(file);
   try {
-    const extra = await loadStepFile(file, progress.progress);
+    const extra = await loadStepFile(file, progress.progress, { alive: () => token === projectToken });
     if (token !== projectToken) return;
     const index = state.addedFiles.length;
     appendParts(state.parts, extra);
@@ -1265,6 +1267,30 @@ async function openProject(record) {
     }
   }
   if (token === projectToken) suspendSaving(false);
+}
+
+/**
+ * Converts the models of the other stored projects in the background, most
+ * recently changed first, so they open without waiting. Files the user opens
+ * or adds always go first.
+ */
+async function preloadProjects() {
+  const others = state.projects
+    .filter((project) => project.id !== state.project.id)
+    .sort((a, b) => (b.modifiedAt || 0) - (a.modifiedAt || 0));
+  for (const project of others) {
+    const record = getProject(project.id);
+    if (!record?.fileName) continue;
+    const keys = [fileKeys.step(record.id)];
+    for (let i = 0; i < addedFileCount(record); i++) keys.push(fileKeys.addedStep(record.id, i));
+    for (const key of keys) {
+      try {
+        preloadStepFile(await files.get(key));
+      } catch {
+        // Opening the project reports a missing file.
+      }
+    }
+  }
 }
 
 async function switchProject(id) {
@@ -1416,6 +1442,7 @@ function showOverview(open) {
   }
   if (!open) setOverviewDialog(null);
   overviewOpen = open;
+  reprioritizeImports();
   overviewEl.hidden = !open;
   document.body.classList.toggle('overview-open', open);
   if (open) {
@@ -2126,7 +2153,8 @@ window.addEventListener('keydown', (event) => {
 
 new ResizeObserver(() => updateInset()).observe(stageEl);
 updateInset(true);
-openProject(initProjects());
+// The other projects follow once the open one has its model, so it gets the computer first.
+openProject(initProjects()).finally(preloadProjects);
 // With several projects the app starts on the overview, like a list of recent documents.
 if (state.projects.length > 1) showOverview(true);
 
