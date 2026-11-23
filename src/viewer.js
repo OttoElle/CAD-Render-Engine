@@ -648,32 +648,96 @@ export class Viewer {
 
   /**
    * Turns the camera to look at the model from the given world direction,
-   * keeping the current pivot and zoom. Used by the view cube.
+   * keeping the current pivot and zoom. Used by the view cube. The view ends
+   * in the standard CAD orientation without roll: Z up for side and corner
+   * views, Y up from the top and -Y up from below.
    */
   lookFrom(direction) {
     const offset = this.camera.position.clone().sub(this.controls.target);
-    this._moveCamera(this.controls.target.clone(), direction.clone().normalize(), offset.length(), true);
+    this._moveCamera(this.controls.target.clone(), direction.clone().normalize(), offset.length(), true, 0);
   }
 
-  /** Orbits by the given angles in degrees (positive azimuth turns the camera to the right). */
+  /**
+   * Orbits around the pivot by the given angles in degrees, in screen terms:
+   * positive azimuth turns the camera to the right, positive elevation up,
+   * whatever the current roll. Sideways turns around the world's vertical
+   * when the controls keep the horizon level.
+   */
   orbitBy(azimuth, elevation) {
-    const offset = this.camera.position.clone().sub(this.controls.target);
-    const spherical = new THREE.Spherical().setFromVector3(offset);
-    spherical.theta += THREE.MathUtils.degToRad(azimuth);
-    spherical.phi = THREE.MathUtils.clamp(spherical.phi - THREE.MathUtils.degToRad(elevation), 0.001, Math.PI - 0.001);
-    const direction = new THREE.Vector3().setFromSpherical(spherical).normalize();
-    this._moveCamera(this.controls.target.clone(), direction, offset.length(), true);
+    const target = this.controls.target.clone();
+    const offset = this.camera.position.clone().sub(target);
+    const orientation = this.controls._orientation();
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(orientation);
+    let up = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
+    if (this.controls.levelHorizon) up = new THREE.Vector3(0, up.y >= 0 ? 1 : -1, 0);
+    const turn = new THREE.Quaternion()
+      .setFromAxisAngle(up, THREE.MathUtils.degToRad(azimuth))
+      .multiply(new THREE.Quaternion().setFromAxisAngle(right, -THREE.MathUtils.degToRad(elevation)));
+    this._animateOrientation(target, turn.multiply(orientation), offset.length());
   }
 
-  _moveCamera(target, direction, distance, animate) {
-    // Looking straight along the up axis is degenerate for orbit controls; nudge it.
+  /** The camera orientation looking at the target from `direction`, levelled to world Y up and rolled by `roll`. */
+  _orientationFor(direction, roll) {
+    const matrix = new THREE.Matrix4().lookAt(direction, new THREE.Vector3(), new THREE.Vector3(0, 1, 0));
+    const q = new THREE.Quaternion().setFromRotationMatrix(matrix);
+    if (roll) q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), roll));
+    return q;
+  }
+
+  /** Places the camera at `distance` from `target` with the given orientation, keeping the roll the controls need. */
+  _applyOrientation(orientation, distance, target) {
+    this.controls.target.copy(target);
+    const direction = new THREE.Vector3(0, 0, 1).applyQuaternion(orientation);
+    this.camera.position.copy(target).addScaledVector(direction, distance);
+    // Split into "levelled look at target" and a roll around the viewing axis.
+    this.controls.update();
+    const rest = this.camera.quaternion.clone().invert().multiply(orientation);
+    this.roll = THREE.MathUtils.euclideanModulo(2 * Math.atan2(rest.z, rest.w) + Math.PI, Math.PI * 2) - Math.PI;
+    this._updateClipPlanes();
+    this._syncCamera();
+    this._notifyView();
+  }
+
+  /**
+   * Turns the whole camera orientation smoothly (roll included), so views
+   * straight from above or below don't flip at the end of the animation.
+   * `finish` runs instead of the last frame, for exact end values.
+   */
+  _animateOrientation(target, endOrientation, distance, finish) {
+    const start = this.controls._orientation();
+    const startDist = this.camera.position.distanceTo(this.controls.target);
+    const startTarget = this.controls.target.clone();
+    const started = performance.now();
+    const duration = 220;
+    this._animation = () => {
+      const t = Math.min((performance.now() - started) / duration, 1);
+      if (t >= 1) {
+        this._animation = null;
+        if (finish) finish();
+        else this._applyOrientation(endOrientation, distance, target);
+        return;
+      }
+      const eased = t * t * (3 - 2 * t);
+      this._applyOrientation(
+        start.clone().slerp(endOrientation, eased),
+        THREE.MathUtils.lerp(startDist, distance, eased),
+        startTarget.clone().lerp(target, eased),
+      );
+    };
+  }
+
+  /** Moves the camera to look from `direction` (world) at `target`, ending with `roll` in radians. */
+  _moveCamera(target, direction, distance, animate, roll = this.roll) {
+    // Looking straight along the up axis is degenerate for orbit controls; nudge it
+    // towards the front, so the top view has CAD +Y up and the bottom view -Y.
     if (Math.hypot(direction.x, direction.z) < 0.0005) {
       direction.set(0, Math.sign(direction.y), 0.0005).normalize();
     }
 
-    const apply = (dir, dist, tgt) => {
-      this.controls.target.copy(tgt);
-      this.camera.position.copy(tgt).addScaledVector(dir, dist);
+    const apply = () => {
+      this.roll = roll;
+      this.controls.target.copy(target);
+      this.camera.position.copy(target).addScaledVector(direction, distance);
       this._updateClipPlanes();
       this._syncCamera();
       this._notifyView();
@@ -681,30 +745,10 @@ export class Viewer {
 
     this._animation = null;
     if (!animate) {
-      apply(direction, distance, target);
+      apply();
       return;
     }
-
-    const startOffset = this.camera.position.clone().sub(this.controls.target);
-    const startDir = startOffset.clone().normalize();
-    const startDist = startOffset.length();
-    const startTarget = this.controls.target.clone();
-    const rotation = new THREE.Quaternion().setFromUnitVectors(startDir, direction);
-    const identity = new THREE.Quaternion();
-    const started = performance.now();
-    const duration = 220;
-
-    this._animation = () => {
-      const t = Math.min((performance.now() - started) / duration, 1);
-      const eased = t * t * (3 - 2 * t);
-      const q = identity.clone().slerp(rotation, eased);
-      apply(
-        startDir.clone().applyQuaternion(q).normalize(),
-        THREE.MathUtils.lerp(startDist, distance, eased),
-        startTarget.clone().lerp(target, eased),
-      );
-      if (t >= 1) this._animation = null;
-    };
+    this._animateOrientation(target, this._orientationFor(direction, roll), distance, apply);
   }
 
   /**
