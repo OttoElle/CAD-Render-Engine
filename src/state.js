@@ -276,6 +276,7 @@ export function clearRenders() {
 export function resetForModel(fileName, parts) {
   state.fileName = fileName;
   state.parts = parts;
+  previousMaterial.clear();
   state.materials = [];
   state.sections = [];
   state.sectionCap = defaultSectionCap();
@@ -332,14 +333,30 @@ export function removeMaterial(id) {
   emit('materials');
 }
 
-/** Assigns or unassigns parts for an entry (null = back to the CAD colour), removing them from every other entry. */
+/**
+ * The entry each part belonged to before another entry took it over, so that
+ * unassigning a part by mistake gives it back its old material instead of the
+ * CAD colour. Kept for the session only.
+ */
+const previousMaterial = new Map();
+
+/**
+ * Assigns or unassigns parts for an entry (null = back to the CAD colour), removing them from every other entry.
+ * A part taken off an entry goes back to the material it had before, if that entry still exists.
+ */
 export function setPartsAssigned(entry, partIds, assigned) {
   for (const partId of partIds) {
     if (assigned || !entry) {
+      const owner = materialEntryOf(partId);
+      if (owner && owner !== entry) previousMaterial.set(partId, owner.id);
+      if (!entry) previousMaterial.delete(partId);
       for (const other of state.materials) other.partIds.delete(partId);
       entry?.partIds.add(partId);
-    } else {
+    } else if (entry.partIds.has(partId)) {
       entry.partIds.delete(partId);
+      const before = state.materials.find((item) => item.id === previousMaterial.get(partId));
+      previousMaterial.delete(partId);
+      before?.partIds.add(partId);
     }
   }
   emit('materials');

@@ -1412,6 +1412,15 @@ button.key.recording {
   background: var(--page);
 }
 
+.part-list li.pickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.part-list li.pickable input {
+  pointer-events: none;
+}
+
 .part-name {
   flex: 1;
   min-width: 0;

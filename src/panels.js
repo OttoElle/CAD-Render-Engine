@@ -752,13 +752,72 @@ function sectionPanel(section, { viewer, actions }) {
 
 // --- Materials --------------------------------------------------------------------
 
-function partList(parts, renderItem, actions) {
+function partList(parts, renderItem, actions, itemProps) {
   return h(
     'ul',
     { class: 'part-list', onmouseleave: () => actions.hover(null) },
     parts.map((part) =>
-      h('li', { onmouseenter: () => actions.hover([part.id]), title: part.label }, renderItem(part)),
+      h(
+        'li',
+        { onmouseenter: () => actions.hover([part.id]), title: part.label, 'data-anchor': `part:${part.id}`, ...itemProps?.(part) },
+        renderItem(part),
+      ),
     ),
+  );
+}
+
+/** The part last clicked in a material's pick list, where a Shift click range starts. */
+let pickAnchor = null;
+
+/**
+ * Every part with a checkbox for one material. A click on a row switches the
+ * part (and its identical copies); Shift click sets the whole range from the
+ * part clicked before to the same state.
+ */
+function pickList(entry, actions) {
+  const parts = state.parts.filter((part) => !part.removed);
+  const toggle = (part, event) => {
+    const assigned = !entry.partIds.has(part.id);
+    const index = parts.indexOf(part);
+    const anchorIndex = pickAnchor?.entryId === entry.id ? parts.findIndex((item) => item.id === pickAnchor.partId) : -1;
+    const range =
+      event.shiftKey && anchorIndex >= 0
+        ? parts.slice(Math.min(anchorIndex, index), Math.max(anchorIndex, index) + 1)
+        : [part];
+    pickAnchor = { entryId: entry.id, partId: part.id };
+    const ids = new Set(range.flatMap((item) => identicalParts(item).map((p) => p.id)));
+    setPartsAssigned(entry, [...ids], assigned);
+  };
+  return partList(
+    parts,
+    (part) => {
+      const owner = materialEntryOf(part.id);
+      return [
+        h('input', { type: 'checkbox', checked: owner === entry, tabIndex: -1, 'aria-hidden': 'true' }),
+        h('span', { class: 'part-name' }, part.label),
+        owner && owner !== entry ? h('span', { class: 'part-owner' }, materialEntryLabel(owner)) : null,
+      ];
+    },
+    actions,
+    (part) => ({
+      class: 'pickable',
+      role: 'checkbox',
+      'aria-checked': String(entry.partIds.has(part.id)),
+      tabIndex: 0,
+      // Keeps Shift click from selecting text across the rows.
+      onmousedown: (event) => {
+        if (event.shiftKey) event.preventDefault();
+      },
+      onclick: (event) => {
+        event.preventDefault();
+        toggle(part, event);
+      },
+      onkeydown: (event) => {
+        if (event.key !== ' ' && event.key !== 'Enter') return;
+        event.preventDefault();
+        toggle(part, event);
+      },
+    }),
   );
 }
 
@@ -927,23 +986,7 @@ function materialPanel(entry, { actions }) {
           'material-pick-list',
           'Pick from list',
           [
-            partList(
-              state.parts,
-              (part) => {
-                const owner = materialEntryOf(part.id);
-                return [
-                  h('input', {
-                    type: 'checkbox',
-                    checked: owner === entry,
-                    onchange: (event) =>
-                      setPartsAssigned(entry, identicalParts(part).map((p) => p.id), event.target.checked),
-                  }),
-                  h('span', { class: 'part-name' }, part.label),
-                  owner && owner !== entry ? h('span', { class: 'part-owner' }, materialEntryLabel(owner)) : null,
-                ];
-              },
-              actions,
-            ),
+            pickList(entry, actions),
           ],
           { open: false },
         ),
@@ -1906,6 +1949,9 @@ function renderPanelFor(render, { actions }) {
  * rebuilding, or null. Panels that change the project get ✓ (keep) and ✗
  * (discard) in their header.
  */
+/** Lists with their own scroll bar inside a panel; their position is kept when the panel is rebuilt. */
+const INNER_SCROLLERS = '.part-list, .selection-box, .item-list';
+
 export function renderPanel(container, context) {
   const key = state.selected;
   const [kind, idText] = key.split(':');
@@ -1956,7 +2002,12 @@ export function renderPanel(container, context) {
   const editable = context.editable && panel.editable !== false;
   const headerButton = (name, title, run, className = 'icon-button') =>
     h('button', { class: className, title, 'aria-label': title, onclick: run }, icon(name, 16));
+  const sameKey = container.dataset.key === key;
   const scroll = container.querySelector('.panel-body')?.scrollTop ?? 0;
+  const innerScrolls = [...container.querySelectorAll(INNER_SCROLLERS)].map((node) => node.scrollTop);
+  // The row under the pointer (or the pick list) stays where it is on screen, so lists don't jump.
+  const anchorNode = [...container.querySelectorAll('[data-anchor]:hover')].pop() || container.querySelector('.panel-body .part-list');
+  const anchor = anchorNode && { key: anchorNode.dataset.anchor, top: anchorNode.getBoundingClientRect().top, list: !anchorNode.dataset.anchor };
   const body = h('div', { class: 'panel-body' }, panel.body);
   const footer = (panel.footer || []).flat(Infinity).filter(Boolean);
   const header = h(
@@ -1978,7 +2029,15 @@ export function renderPanel(container, context) {
   );
   container.replaceChildren(header, body);
   if (footer.length > 0) container.append(h('footer', { class: 'panel-footer' }, footer));
-  body.scrollTop = container.dataset.key === key ? scroll : 0;
+  body.scrollTop = sameKey ? scroll : 0;
+  if (sameKey) {
+    const scrollers = body.querySelectorAll(INNER_SCROLLERS);
+    innerScrolls.forEach((top, i) => {
+      if (scrollers[i]) scrollers[i].scrollTop = top;
+    });
+    const again = anchor && (anchor.list ? body.querySelector('.part-list') : body.querySelector(`[data-anchor="${anchor.key}"]`));
+    if (again) body.scrollTop += again.getBoundingClientRect().top - anchor.top;
+  }
   container.dataset.key = key;
   return panel.live || null;
 }

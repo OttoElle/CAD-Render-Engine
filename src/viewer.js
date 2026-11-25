@@ -629,21 +629,72 @@ export class Viewer {
     this._frame(this.camera.position.clone().sub(this.controls.target).normalize());
   }
 
-  /** Moves the model into the middle of the view (and the output frame) without changing the zoom. */
+  /**
+   * Moves the visible model into the middle of the output frame. The zoom
+   * stays, unless the model would stick out of the frame at it; then the
+   * camera backs off just far enough for everything to fit.
+   */
   center() {
+    const box = this._visibleBox();
+    const target = box.getCenter(new THREE.Vector3());
     const offset = this.camera.position.clone().sub(this.controls.target);
-    this._moveCamera(this.bounds.center.clone(), offset.clone().normalize(), offset.length(), true);
+    const direction = offset.clone().normalize();
+    const distance = Math.max(offset.length(), this._fitDistance(box, target, direction, 1.04));
+    this._moveCamera(target, direction, distance, true);
   }
 
   _frame(direction) {
-    const { center, radius } = this.bounds;
-    // Fit into the output frame, which is what the final image shows.
+    const box = this._visibleBox();
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const { vFov, hFov } = this._frameFov();
+    const distance = (sphere.radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.08;
+    this._moveCamera(sphere.center, direction, distance, false);
+  }
+
+  /** The world box around the parts that are shown (all parts when every one is hidden). */
+  _visibleBox() {
+    this.modelRoot.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    const partBox = new THREE.Box3();
+    const parts = this.parts.filter((part) => !part.removed);
+    const shown = parts.filter((part) => part.mesh.visible);
+    for (const part of shown.length > 0 ? shown : parts) {
+      box.union(partBox.copy(part.mesh.geometry.boundingBox).applyMatrix4(part.mesh.matrixWorld));
+    }
+    if (box.isEmpty()) box.setFromCenterAndSize(this.bounds.center, new THREE.Vector3(1, 1, 1).multiplyScalar(this.bounds.radius));
+    return box;
+  }
+
+  /** Vertical and horizontal field of view of the output frame, in radians. */
+  _frameFov() {
     const region = this.getFreeRegion();
     const frame = this.getOutputFrame(this.outputAspect ?? region.width / region.height);
     const vFov = THREE.MathUtils.degToRad(frame.fov);
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (frame.width / frame.height));
-    const distance = (radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.08;
-    this._moveCamera(center, direction, distance, false);
+    return { vFov, hFov };
+  }
+
+  /**
+   * The smallest camera distance from `target`, looking along -`direction`,
+   * at which every corner of `box` lies inside the output frame (with `margin`).
+   */
+  _fitDistance(box, target, direction, margin = 1) {
+    const { vFov, hFov } = this._frameFov();
+    const tanV = Math.tan(vFov / 2) / margin;
+    const tanH = Math.tan(hFov / 2) / margin;
+    // The viewing direction stays, so the current orientation is the final one.
+    const orientation = this.controls._orientation();
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(orientation);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
+    const corner = new THREE.Vector3();
+    let distance = 0;
+    for (let i = 0; i < 8; i++) {
+      corner.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).sub(target);
+      // A corner towards the camera needs the camera further back to stay in the cone.
+      const toward = corner.dot(direction);
+      distance = Math.max(distance, toward + Math.abs(corner.dot(right)) / tanH, toward + Math.abs(corner.dot(up)) / tanV);
+    }
+    return distance;
   }
 
   /**
