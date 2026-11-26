@@ -614,7 +614,7 @@ function capControls({ viewer }) {
               step: spacing >= 5 ? 1 : 0.1,
               min: 0.05,
               digits: 2,
-              title: cap.hatchSpacing > 0 ? 'Distance between the lines' : 'Distance between the lines, chosen from the size of the model',
+              title: cap.hatchSpacing > 0 ? 'Distance between the lines' : 'Distance between the lines, chosen from the size of the model; much smaller parts get closer lines',
               onchange: (value) => set('hatchSpacing')(Math.max(value, 0.05)),
             }),
             // Stored as a share of the spacing, so lines keep their weight when the spacing changes.

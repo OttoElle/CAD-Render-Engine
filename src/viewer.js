@@ -1088,11 +1088,13 @@ export class Viewer {
       if (outlined) part.outlineMaterial = createOutlineMaterial(this.capStyle, faceColor);
       if (part.capMaterial || part.outlineMaterial) this._applyClipping(part);
       const hatched = this.capStyle.hatch !== 'none';
+      if (!part.mesh.geometry.boundingBox) part.mesh.geometry.computeBoundingBox();
+      const partBox = part.mesh.geometry.boundingBox;
       for (const [index, plane] of planes.entries()) {
         const geometry = buildCap(part.mesh.geometry, plane, offset);
         if (!geometry) continue;
         if (part.mesh.visible && !part.removed) bySection.get(cutBy[index])?.push({ geometry, matrix: part.mesh.matrix, partId: part.id });
-        if (hatched) applyHatchUv(geometry, plane, hatchSpacing(this.capStyle, this.modelBox), hatchAngleFor(this.capStyle, part.id));
+        if (hatched) applyHatchUv(geometry, plane, hatchSpacing(this.capStyle, this.modelBox, partBox), hatchAngleFor(this.capStyle, part.id));
         else if (part.finishFrame && !part.capMaterial) applyFinishTangents(geometry, part.look.finish, part.finishFrame);
         const cap = new THREE.Mesh(geometry, part.capMaterial || part.mesh.material);
         cap.castShadow = true;
@@ -1100,7 +1102,7 @@ export class Viewer {
         part.mesh.add(cap);
         part.caps.push(cap);
         // The border sits between the cap and its plane, so it is drawn on top of the cap.
-        const band = outlined ? buildCapOutline(geometry, outlineWidth(this.capStyle, this.modelBox), offset * 0.5) : null;
+        const band = outlined ? buildCapOutline(geometry, outlineWidth(this.capStyle, this.modelBox, partBox), offset * 0.5) : null;
         if (band) {
           const outline = new THREE.Mesh(band, part.outlineMaterial);
           outline.raycast = () => {};

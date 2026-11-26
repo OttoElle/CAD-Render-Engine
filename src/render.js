@@ -80,12 +80,14 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
     const outlineMaterial = hasOutline(capStyle)
       ? createOutlineMaterial(capStyle, capStyle.mode === 'color' ? capStyle.color : part.colorHex || '#c9ced6')
       : null;
+    if (!part.mesh.geometry.boundingBox) part.mesh.geometry.computeBoundingBox();
+    const partBox = part.mesh.geometry.boundingBox;
     for (const [index, plane] of cutting.entries()) {
       let cap = buildCap(source, plane);
       const collected = Boolean(cap) && viewer.capStyle.overlaps !== false && part.mesh.visible;
       if (collected) bySection.get(cutBy[index])?.push({ geometry: cap, matrix: part.mesh.matrix, partId: part.id });
       // The border of the cut face, a hair in front of it.
-      let band = outlineMaterial && cap ? buildCapOutline(cap, outlineWidth(capStyle, viewer.modelBox), -viewer.bounds.radius * 1e-4) : null;
+      let band = outlineMaterial && cap ? buildCapOutline(cap, outlineWidth(capStyle, viewer.modelBox, partBox), -viewer.bounds.radius * 1e-4) : null;
       if (cap && cutting.length > 1) {
         const others = cutting.filter((other) => other !== plane);
         const untrimmed = cap;
@@ -101,7 +103,7 @@ function buildRenderScene(viewer, { transparent, backdrop, camera, width, height
       }
       if (band) own(new THREE.Mesh(band, outlineMaterial));
       if (!cap) continue;
-      if (hatched) applyHatchUv(cap, plane, hatchSpacing(viewer.capStyle, viewer.modelBox), hatchAngleFor(viewer.capStyle, part.id));
+      if (hatched) applyHatchUv(cap, plane, hatchSpacing(viewer.capStyle, viewer.modelBox, partBox), hatchAngleFor(viewer.capStyle, part.id));
       else if (capMaterial === material) finish?.(cap);
       own(new THREE.Mesh(cap, capMaterial));
     }
