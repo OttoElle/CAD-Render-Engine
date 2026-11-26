@@ -630,16 +630,37 @@ export class Viewer {
   }
 
   /**
-   * Moves the visible model into the middle of the output frame. The zoom
-   * stays, unless the model would stick out of the frame at it; then the
-   * camera backs off just far enough for everything to fit.
+   * Moves the visible model into the middle of the output frame without
+   * changing the zoom. What gets centred is the model's outline on screen
+   * (the corners of the visible parts' boxes), not its 3D centre, so the
+   * model sits evenly in the frame from any viewing angle.
    */
   center() {
     const box = this._visibleBox();
-    const target = box.getCenter(new THREE.Vector3());
     const offset = this.camera.position.clone().sub(this.controls.target);
     const direction = offset.clone().normalize();
-    const distance = Math.max(offset.length(), this._fitDistance(box, target, direction, 1.04));
+    const distance = offset.length();
+    const orientation = this.controls._orientation();
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(orientation);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
+    const points = this._visibleCorners();
+    const target = box.getCenter(new THREE.Vector3());
+    // Perspective shifts the outline as the camera moves, so settle in a few steps.
+    for (let step = 0; step < 4; step++) {
+      const eye = target.clone().addScaledVector(direction, distance);
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const point of points) {
+        const relative = point.clone().sub(eye);
+        const depth = Math.max(-relative.dot(direction), distance * 1e-3);
+        const x = relative.dot(right) / depth;
+        const y = relative.dot(up) / depth;
+        minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+      if (!Number.isFinite(minX)) break;
+      // Slopes are relative to the viewing axis; at the pivot's depth they turn into lengths.
+      target.addScaledVector(right, ((minX + maxX) / 2) * distance).addScaledVector(up, ((minY + maxY) / 2) * distance);
+    }
     this._moveCamera(target, direction, distance, true);
   }
 
@@ -649,6 +670,23 @@ export class Viewer {
     const { vFov, hFov } = this._frameFov();
     const distance = (sphere.radius / Math.sin(Math.min(vFov, hFov) / 2)) * 1.08;
     this._moveCamera(sphere.center, direction, distance, false);
+  }
+
+  /** Corners of the boxes of the parts that are shown (all parts when every one is hidden), in world space. */
+  _visibleCorners() {
+    this.modelRoot.updateMatrixWorld(true);
+    const parts = this.parts.filter((part) => !part.removed);
+    const shown = parts.filter((part) => part.mesh.visible);
+    const points = [];
+    for (const part of shown.length > 0 ? shown : parts) {
+      const { min, max } = part.mesh.geometry.boundingBox;
+      for (let i = 0; i < 8; i++) {
+        points.push(
+          new THREE.Vector3(i & 1 ? max.x : min.x, i & 2 ? max.y : min.y, i & 4 ? max.z : min.z).applyMatrix4(part.mesh.matrixWorld),
+        );
+      }
+    }
+    return points;
   }
 
   /** The world box around the parts that are shown (all parts when every one is hidden). */
@@ -672,29 +710,6 @@ export class Viewer {
     const vFov = THREE.MathUtils.degToRad(frame.fov);
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * (frame.width / frame.height));
     return { vFov, hFov };
-  }
-
-  /**
-   * The smallest camera distance from `target`, looking along -`direction`,
-   * at which every corner of `box` lies inside the output frame (with `margin`).
-   */
-  _fitDistance(box, target, direction, margin = 1) {
-    const { vFov, hFov } = this._frameFov();
-    const tanV = Math.tan(vFov / 2) / margin;
-    const tanH = Math.tan(hFov / 2) / margin;
-    // The viewing direction stays, so the current orientation is the final one.
-    const orientation = this.controls._orientation();
-    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(orientation);
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(orientation);
-    const corner = new THREE.Vector3();
-    let distance = 0;
-    for (let i = 0; i < 8; i++) {
-      corner.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).sub(target);
-      // A corner towards the camera needs the camera further back to stay in the cone.
-      const toward = corner.dot(direction);
-      distance = Math.max(distance, toward + Math.abs(corner.dot(right)) / tanH, toward + Math.abs(corner.dot(up)) / tanV);
-    }
-    return distance;
   }
 
   /**
