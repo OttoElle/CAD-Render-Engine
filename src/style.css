@@ -272,8 +272,21 @@ body {
   color: var(--danger);
 }
 
-.icon-button.armed {
-  background: #fdecea;
+.icon-button.armed,
+.icon-button.armed:hover {
+  width: auto;
+  gap: 4px;
+  padding: 0 8px;
+  color: #fff;
+  background: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* An armed delete button stays visible even when the pointer has left the tile. */
+.tile-actions:has(.armed) {
+  opacity: 1;
+  transition: none;
 }
 
 /* --- Stage ----------------------------------------------------------------- */

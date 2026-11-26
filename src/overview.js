@@ -23,33 +23,44 @@ function iconButton(name, title, run, className = 'icon-button') {
   return h('button', { class: className, title, 'aria-label': title, onclick: stop(run) }, icon(name, 16));
 }
 
-/** A button that needs a second click, for deleting. */
-function deleteButton(title, run) {
-  let armed = false;
-  const node = h(
-    'button',
-    {
-      class: 'icon-button danger-hover',
-      title,
-      'aria-label': title,
-      onclick: (event) => {
-        event.stopPropagation();
-        if (armed) {
-          run();
-          return;
-        }
-        armed = true;
-        node.classList.add('armed');
-        node.title = 'Click again to delete';
-        setTimeout(() => {
-          armed = false;
-          node.classList.remove('armed');
-          node.title = title;
-        }, 3000);
-      },
+/**
+ * The delete button waiting for its second click. Kept outside the buttons so
+ * that it survives the overview being rebuilt (models loading in the
+ * background, thumbnails arriving, renderings finishing) in between the clicks.
+ */
+let armed = { key: null, timer: 0 };
+
+function disarm() {
+  clearTimeout(armed.timer);
+  armed = { key: null, timer: 0 };
+  for (const node of document.querySelectorAll('.icon-button.armed')) setArmedLook(node, false);
+}
+
+function setArmedLook(node, on) {
+  node.classList.toggle('armed', on);
+  node.title = on ? 'Click again to delete' : node.dataset.title;
+  node.replaceChildren(icon('trash', 16), ...(on ? [h('span', null, 'Delete?')] : []));
+}
+
+/** A button that needs a second click, for deleting. `key` names what it deletes. */
+function deleteButton(key, title, run) {
+  const node = h('button', {
+    class: 'icon-button danger-hover',
+    'data-title': title,
+    'aria-label': title,
+    onclick: (event) => {
+      event.stopPropagation();
+      if (armed.key === key) {
+        disarm();
+        run();
+        return;
+      }
+      disarm();
+      armed = { key, timer: setTimeout(disarm, 4000) };
+      setArmedLook(node, true);
     },
-    icon('trash', 16),
-  );
+  });
+  setArmedLook(node, armed.key === key);
   return node;
 }
 
@@ -115,7 +126,7 @@ function tile(project, actions) {
         iconButton('pencil', 'Name and template', () => actions.editProject(project.id)),
         iconButton('copy', 'Duplicate', () => actions.duplicateProject(project.id)),
         iconButton('download', 'Export as a file', () => actions.exportProject(project.id)),
-        deleteButton('Delete project', () => actions.deleteProject(project.id)),
+        deleteButton(`project:${project.id}`, 'Delete project', () => actions.deleteProject(project.id)),
       ),
     ),
   );
@@ -312,7 +323,7 @@ function templatesSection(actions) {
           'ul',
           { class: 'template-list' },
           state.templates.map((template) =>
-            h('li', null, h('span', null, template.name), deleteButton('Delete template', () => actions.deleteTemplate(template.id))),
+            h('li', null, h('span', null, template.name), deleteButton(`template:${template.id}`, 'Delete template', () => actions.deleteTemplate(template.id))),
           ),
         )
       : null,
