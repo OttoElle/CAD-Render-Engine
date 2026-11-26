@@ -337,6 +337,7 @@ export function buildCap(geometry, plane, offset = 0) {
   }
 
   const outPosition = [];
+  const flat = []; // the same triangles in plane coordinates, counter-clockwise
   const origin = normal.clone().multiplyScalar(offset - constant);
   const toVectors = (polygon) => {
     const vectors = [];
@@ -354,6 +355,8 @@ export function buildCap(geometry, plane, offset = 0) {
       const pb = all[b];
       const pc = all[c];
       const cross = (pb.x - pa.x) * (pc.y - pa.y) - (pb.y - pa.y) * (pc.x - pa.x);
+      if (cross > 0) flat.push(pa.x, pa.y, pb.x, pb.y, pc.x, pc.y);
+      else flat.push(pa.x, pa.y, pc.x, pc.y, pb.x, pb.y);
       for (const p of cross > 0 ? [pa, pc, pb] : [pa, pb, pc]) {
         outPosition.push(
           origin.x + u.x * p.x + v.x * p.y,
@@ -375,7 +378,7 @@ export function buildCap(geometry, plane, offset = 0) {
   }
   result.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   // Kept for drawing the outlines of the cut faces (see buildCapOutline).
-  result.userData.outline = { loops, u, v, normal: normal.clone(), constant };
+  result.userData.outline = { loops, triangles: new Float64Array(flat), u, v, normal: normal.clone(), constant };
   return result;
 }
 
@@ -384,69 +387,125 @@ export function buildCap(geometry, plane, offset = 0) {
  * border of a cut face in a CAD drawing. A band of triangles rather than
  * lines, so it shows in the path-traced rendering as well. `offset` places it
  * at that distance from the plane on the kept side, just in front of the cap.
+ *
+ * The band is every point of the face within `width` of its outline: a strip
+ * around each outline edge and a disc at each corner, each cut to the
+ * triangles of the cap. So it never reaches outside the face, also where the
+ * face is thinner than the band or its corners are tightly rounded. Pieces
+ * overlap, which does not show since they lie in one plane in one colour.
  */
 export function buildCapOutline(cap, width, offset = 0) {
   const outline = cap?.userData.outline;
   if (!outline || !(width > 0)) return null;
-  const { loops, u, v, normal, constant } = outline;
+  const { loops, triangles, u, v, normal, constant } = outline;
   const origin = normal.clone().multiplyScalar(offset - constant);
   const out = [];
   const put = (x, y) => out.push(origin.x + u.x * x + v.x * y, origin.y + u.y * x + v.y * y, origin.z + u.z * x + v.z * y);
 
+  // The cap triangles, counter-clockwise, in a grid for finding the ones a piece touches.
+  const count = triangles.length / 6;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < triangles.length; i += 2) {
+    minX = Math.min(minX, triangles[i]);
+    maxX = Math.max(maxX, triangles[i]);
+    minY = Math.min(minY, triangles[i + 1]);
+    maxY = Math.max(maxY, triangles[i + 1]);
+  }
+  const cells = Math.max(1, Math.min(96, Math.ceil(Math.sqrt(count))));
+  const cellX = (maxX - minX) / cells || 1;
+  const cellY = (maxY - minY) / cells || 1;
+  const cellOf = (value, min, size) => Math.min(cells - 1, Math.max(0, Math.floor((value - min) / size)));
+  const grid = Array.from({ length: cells * cells }, () => []);
+  for (let t = 0; t < count; t += 1) {
+    const o = t * 6;
+    const x0 = cellOf(Math.min(triangles[o], triangles[o + 2], triangles[o + 4]), minX, cellX);
+    const x1 = cellOf(Math.max(triangles[o], triangles[o + 2], triangles[o + 4]), minX, cellX);
+    const y0 = cellOf(Math.min(triangles[o + 1], triangles[o + 3], triangles[o + 5]), minY, cellY);
+    const y1 = cellOf(Math.max(triangles[o + 1], triangles[o + 3], triangles[o + 5]), minY, cellY);
+    for (let y = y0; y <= y1; y += 1) for (let x = x0; x <= x1; x += 1) grid[y * cells + x].push(t);
+  }
+  const seen = new Uint32Array(count);
+  // Slivers left over from cutting add triangles but nothing visible.
+  const areaFloor = width * width * 1e-6;
+  let stamp = 0;
+
+  // Cuts a convex piece (flat x, y list) to each cap triangle it touches and keeps what is inside.
+  const clipToCap = (piece) => {
+    let pMinX = Infinity;
+    let pMinY = Infinity;
+    let pMaxX = -Infinity;
+    let pMaxY = -Infinity;
+    for (let i = 0; i < piece.length; i += 2) {
+      pMinX = Math.min(pMinX, piece[i]);
+      pMaxX = Math.max(pMaxX, piece[i]);
+      pMinY = Math.min(pMinY, piece[i + 1]);
+      pMaxY = Math.max(pMaxY, piece[i + 1]);
+    }
+    if (pMaxX < minX || pMinX > maxX || pMaxY < minY || pMinY > maxY) return;
+    stamp += 1;
+    const x0 = cellOf(pMinX, minX, cellX);
+    const x1 = cellOf(pMaxX, minX, cellX);
+    const y0 = cellOf(pMinY, minY, cellY);
+    const y1 = cellOf(pMaxY, minY, cellY);
+    for (let gy = y0; gy <= y1; gy += 1) {
+      for (let gx = x0; gx <= x1; gx += 1) {
+        for (const t of grid[gy * cells + gx]) {
+          if (seen[t] === stamp) continue;
+          seen[t] = stamp;
+          const o = t * 6;
+          let polygon = piece;
+          for (let e = 0; e < 3 && polygon.length >= 6; e += 1) {
+            const ax = triangles[o + e * 2];
+            const ay = triangles[o + e * 2 + 1];
+            const bx = triangles[o + ((e + 1) % 3) * 2];
+            const by = triangles[o + ((e + 1) % 3) * 2 + 1];
+            polygon = clipConvexByLine(polygon, ax, ay, bx, by);
+          }
+          if (polygon.length < 6 || Math.abs(signedArea(polygon)) < areaFloor) continue;
+          for (let i = 2; i + 3 < polygon.length; i += 2) {
+            put(polygon[0], polygon[1]);
+            put(polygon[i], polygon[i + 1]);
+            put(polygon[i + 2], polygon[i + 3]);
+          }
+        }
+      }
+    }
+  };
+
+  const disc = new Float64Array(12 * 2);
   for (const loop of loops) {
     const p = loop.polygon;
     const n = p.length / 2;
     if (n < 3) continue;
-    // The cut face lies left of a counter-clockwise outer outline and right of a counter-clockwise hole.
-    const side = (signedArea(p) > 0) === (loop.depth % 2 === 0) ? 1 : -1;
-    // Each corner moves inwards along the mitre of its two edges, limited at sharp corners.
-    const inner = new Float64Array(n * 2);
-    for (let i = 0; i < n; i += 1) {
-      const prev = (i - 1 + n) % n;
-      const next = (i + 1) % n;
-      let ax = p[i * 2] - p[prev * 2];
-      let ay = p[i * 2 + 1] - p[prev * 2 + 1];
-      let bx = p[next * 2] - p[i * 2];
-      let by = p[next * 2 + 1] - p[i * 2 + 1];
-      const la = Math.hypot(ax, ay) || 1;
-      const lb = Math.hypot(bx, by) || 1;
-      ax /= la;
-      ay /= la;
-      bx /= lb;
-      by /= lb;
-      // Left normals of both edges, averaged.
-      let mx = -ay - by;
-      let my = ax + bx;
-      const lm = Math.hypot(mx, my);
-      if (lm < 1e-9) {
-        mx = -ay;
-        my = ax;
-      } else {
-        mx /= lm;
-        my /= lm;
-      }
-      const cos = Math.max(mx * -ay + my * ax, 0.35);
-      const reach = Math.min(width / cos, Math.min(la, lb) * 4 + width);
-      inner[i * 2] = p[i * 2] + side * mx * reach;
-      inner[i * 2 + 1] = p[i * 2 + 1] + side * my * reach;
-    }
     for (let i = 0; i < n; i += 1) {
       const j = (i + 1) % n;
-      const ox0 = p[i * 2];
-      const oy0 = p[i * 2 + 1];
-      const ox1 = p[j * 2];
-      const oy1 = p[j * 2 + 1];
-      const ix0 = inner[i * 2];
-      const iy0 = inner[i * 2 + 1];
-      const ix1 = inner[j * 2];
-      const iy1 = inner[j * 2 + 1];
-      // Two triangles per edge; the band's material is double-sided.
-      put(ox0, oy0);
-      put(ox1, oy1);
-      put(ix1, iy1);
-      put(ox0, oy0);
-      put(ix1, iy1);
-      put(ix0, iy0);
+      const k = (i + 2) % n;
+      const ax = p[i * 2];
+      const ay = p[i * 2 + 1];
+      const bx = p[j * 2];
+      const by = p[j * 2 + 1];
+      const length = Math.hypot(bx - ax, by - ay);
+      if (length === 0) continue;
+      const dx = (bx - ax) / length;
+      const dy = (by - ay) / length;
+      const nx = -dy * width;
+      const ny = dx * width;
+      clipToCap([ax + nx, ay + ny, ax - nx, ay - ny, bx - nx, by - ny, bx + nx, by + ny]);
+      // Where the outline turns noticeably, the strips leave a gap at the corner: a disc fills it.
+      const ex = p[k * 2] - bx;
+      const ey = p[k * 2 + 1] - by;
+      const next = Math.hypot(ex, ey) || 1;
+      if ((dx * ex + dy * ey) / next < 0.99) {
+        for (let s = 0; s < 12; s += 1) {
+          const angle = (s / 12) * Math.PI * 2;
+          disc[s * 2] = bx + Math.cos(angle) * width;
+          disc[s * 2 + 1] = by + Math.sin(angle) * width;
+        }
+        clipToCap(disc);
+      }
     }
   }
   if (out.length === 0) return null;
@@ -460,4 +519,26 @@ export function buildCapOutline(cap, width, offset = 0) {
   }
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   return geometry;
+}
+
+/** The part of a convex polygon (flat x, y list, either winding) left of the line from a to b. */
+function clipConvexByLine(polygon, ax, ay, bx, by) {
+  const out = [];
+  const n = polygon.length / 2;
+  const side = (x, y) => (bx - ax) * (y - ay) - (by - ay) * (x - ax);
+  for (let i = 0; i < n; i += 1) {
+    const j = (i + 1) % n;
+    const px = polygon[i * 2];
+    const py = polygon[i * 2 + 1];
+    const qx = polygon[j * 2];
+    const qy = polygon[j * 2 + 1];
+    const sp = side(px, py);
+    const sq = side(qx, qy);
+    if (sp >= 0) out.push(px, py);
+    if (sp >= 0 !== sq >= 0) {
+      const t = sp / (sp - sq);
+      out.push(px + t * (qx - px), py + t * (qy - py));
+    }
+  }
+  return out;
 }

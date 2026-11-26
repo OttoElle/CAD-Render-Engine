@@ -39,18 +39,24 @@ function hatchTexture(base, line, pattern, share) {
   return texture;
 }
 
-/** A line spacing that suits the model: about 60 lines across it, rounded to 1, 2 or 5 times a power of ten. */
-export function autoHatchSpacing(box) {
+/** A spacing of about `lines` lines across the box, rounded up to 1, 2 or 5 times a power of ten. */
+export function autoHatchSpacing(box, lines = 60) {
   const size = box.isEmpty() ? 100 : box.getSize(new THREE.Vector3()).length();
-  const raw = size / 60;
+  const raw = size / lines;
   const power = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 5, 10].find((factor) => factor * power >= raw) * power;
   return Number(step.toPrecision(3));
 }
 
-/** The line spacing in mm: the user's, or one chosen from the model. */
-export function hatchSpacing(capStyle, box) {
-  return capStyle.hatchSpacing > 0 ? capStyle.hatchSpacing : autoHatchSpacing(box);
+/**
+ * The line spacing in mm: the user's, or one chosen from the model. With a
+ * part's box, a part much smaller than the model gets closer lines, so that a
+ * screw or pin still shows a few of them, as in a drawing.
+ */
+export function hatchSpacing(capStyle, modelBox, partBox = null) {
+  if (capStyle.hatchSpacing > 0) return capStyle.hatchSpacing;
+  const model = autoHatchSpacing(modelBox);
+  return partBox && !partBox.isEmpty() ? Math.min(model, autoHatchSpacing(partBox, 12)) : model;
 }
 
 /**
@@ -92,9 +98,15 @@ export function hatchLineColor(capStyle, faceColor) {
   return capStyle.hatchAuto ? contrastColor(faceColor) : capStyle.hatchColor;
 }
 
-/** Width of the outline along the edges of a cut face, in mm: a little wider than a hatching line. */
-export function outlineWidth(capStyle, box) {
-  return hatchSpacing(capStyle, box) * capStyle.hatchWidth * 1.4;
+/**
+ * Width of the outline along the edges of a cut face, in mm: a little wider
+ * than a hatching line, and never more than a small share of the part, so the
+ * outline of a small part does not cover its whole cut face.
+ */
+export function outlineWidth(capStyle, modelBox, partBox = null) {
+  const width = hatchSpacing(capStyle, modelBox, partBox) * capStyle.hatchWidth * 1.4;
+  if (!partBox || partBox.isEmpty()) return width;
+  return Math.min(width, partBox.getSize(new THREE.Vector3()).length() * 0.015);
 }
 
 /** Whether cut faces get an outline: only with hatching, as in a drawing. */
